@@ -28,6 +28,17 @@ Isto costuma acontecer quando **Pages → Custom domain** neste repositório apo
 
 Ativa também **Enforce HTTPS** em Pages quando o certificado estiver pronto.
 
+### “Não consigo mudar” `https://afonsorodrigues.com/pinga-ana-adventure-demo/`
+
+Esse endereço **não se edita à mão**: o GitHub monta-o quando há **domínio personalizado** no apex (`afonsorodrigues.com`) ligado à conta ou organização e um repositório de projeto com Pages. O que podes fazer é **mudar a origem do domínio**, não o texto do URL no ecrã.
+
+1. **Neste repositório:** **Settings → Pages → Custom domain** → apaga o valor → **Save** (ou **Remove**). Se o campo estiver vazio mas o site ainda mostrar o domínio, o domínio pode estar noutro sítio (passos 2–3).
+2. **Conta pessoal:** repositório **`afonsoaugusto.github.io`** (se existir) → **Settings → Pages** → rever **Custom domain** e ficheiro **`CNAME`** na raiz do branch que publica.
+3. **Organização:** como **owner**, **Organization settings → Pages** → rever domínio e “Verified domains”; um domínio a nível de org aplica-se a vários repositórios.
+4. Depois de remover o apex deste fluxo, o link que **funciona** passa a ser só o padrão: `https://afonsoaugusto.github.io/pinga-ana-adventure-demo/` (podes partilhar/bookmark este).
+
+Para continuares a usar **afonsorodrigues.com** com o jogo, a solução estável é **subdomínio** (ex.: `pinga.afonsorodrigues.com` com CNAME para `afonsoaugusto.github.io`) e esse nome em **Custom domain** **neste** repo — não o path `/pinga-ana-adventure-demo/` no apex.
+
 ## Build local
 
 ```bash
