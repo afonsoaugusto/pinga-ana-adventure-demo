@@ -4,40 +4,47 @@ Demo **pygame-ce** empacotada com **pygbag** (async + `await asyncio.sleep(0)` n
 
 ## Se o site abrir em branco ou só mostrar este README
 
-O deploy do jogo é feito pelo workflow **Deploy pygbag to GitHub Pages** (artefato em `build/web`). No repositório GitHub:
+No GitHub: **Settings → Pages → Source: GitHub Actions**. Enquanto a origem for uma **branch** com `README.md` na raiz, o GitHub usa **Jekyll** — não o `index.html` do pygbag.
 
-1. **Settings → Pages**
-2. Em **Build and deployment**, em **Source**, escolha **GitHub Actions** (não “Deploy from a branch”).
-3. Abra a aba **Actions**, confira se o workflow concluiu com sucesso e rode de novo se precisar.
+## Queres `http://afonsorodrigues.com/pinga-ana-adventure-demo/` (apex + pasta)
 
-Enquanto a origem for uma **branch** com `README.md` na raiz, o GitHub usa **Jekyll** e a URL mostra esta página estática — não o `index.html` do pygbag.
+O GitHub **não** publica o Pages **deste** repositório de projeto nesse URL quando o apex `afonsorodrigues.com` já é servido pelo repositório **`<utilizador>.github.io`** (site pessoal na raiz). O redirect pode existir, mas o conteúdo do jogo nunca chega a essa pasta — daí o 404.
 
-## 404 em `https://afonsorodrigues.com/pinga-ana-adventure-demo/`
+**Solução suportada por este repo:** copiar o `build/web` para **dentro** do repo `<utilizador>.github.io`, na pasta **`pinga-ana-adventure-demo/`**, onde o teu domínio já está configurado. O pygbag usa caminhos relativos ao `index.html`, por isso isto funciona nessa subpasta.
 
-Isto costuma acontecer quando **Pages → Custom domain** neste repositório aponta o site para um host onde **já existe outro GitHub Pages no apex** (`https://afonsorodrigues.com/` com 200). O GitHub faz **301** de `https://<user>.github.io/pinga-ana-adventure-demo/` para esse URL com **subcaminho**, mas **não publica o projeto nesse path** nesse cenário — daí o **404**.
+### 1. Repositório `afonsoaugusto.github.io`
 
-**Correção (escolha uma):**
+- Deve existir o repo **`afonsoaugusto/afonsoaugusto.github.io`** (ou o da tua org equivalente).
+- **Custom domain** e DNS do `afonsorodrigues.com` ficam nas **Settings → Pages** desse repo (não no do jogo).
 
-1. **URL padrão do GitHub (mais simples)**  
-   Em **Settings → Pages → Custom domain**, **apague** o domínio personalizado deste repositório (ou use “Remove”).  
-   O jogo fica em: `https://afonsoaugusto.github.io/pinga-ana-adventure-demo/`
+### 2. Neste repo (`pinga-ana-adventure-demo`)
 
-2. **Manter o teu domínio**  
-   Cria um **subdomínio** (ex.: `pinga.afonsorodrigues.com` ou `jogo.afonsorodrigues.com`): no DNS, **CNAME** desse nome para `<user>.github.io`.  
-   Em **Pages** deste repo, define **Custom domain** com esse **subdomínio** (não uses o apex + `/pinga-ana-adventure-demo/` como URL “oficial” do GitHub para este site).
+**Settings → Secrets and variables → Actions**
 
-Ativa também **Enforce HTTPS** em Pages quando o certificado estiver pronto.
+| Tipo | Nome | Valor |
+|------|------|--------|
+| **Variable** | `USER_SITE_REPO` | `afonsoaugusto/afonsoaugusto.github.io` (owner/repo do site no apex) |
+| **Variable** (opcional) | `USER_SITE_BRANCH` | Branch onde está o site, por defeito o workflow usa `main` |
+| **Secret** | `USER_PAGES_TOKEN` | Personal Access Token com permissão para dar **push** nesse repo `.github.io` (âmbito `repo` ou pelo menos conteúdo nesse repositório) |
 
-### “Não consigo mudar” `https://afonsorodrigues.com/pinga-ana-adventure-demo/`
+Com `USER_SITE_REPO` **definida**, o workflow **deixa de** usar “GitHub Pages deste repo” e passa a fazer push da pasta `pinga-ana-adventure-demo/` no outro repositório ([peaceiris/actions-gh-pages](https://github.com/peaceiris/actions-gh-pages)).
 
-Esse endereço **não se edita à mão**: o GitHub monta-o quando há **domínio personalizado** no apex (`afonsorodrigues.com`) ligado à conta ou organização e um repositório de projeto com Pages. O que podes fazer é **mudar a origem do domínio**, não o texto do URL no ecrã.
+### 3. Ajustar Pages **deste** repo do jogo
 
-1. **Neste repositório:** **Settings → Pages → Custom domain** → apaga o valor → **Save** (ou **Remove**). Se o campo estiver vazio mas o site ainda mostrar o domínio, o domínio pode estar noutro sítio (passos 2–3).
-2. **Conta pessoal:** repositório **`afonsoaugusto.github.io`** (se existir) → **Settings → Pages** → rever **Custom domain** e ficheiro **`CNAME`** na raiz do branch que publica.
-3. **Organização:** como **owner**, **Organization settings → Pages** → rever domínio e “Verified domains”; um domínio a nível de org aplica-se a vários repositórios.
-4. Depois de remover o apex deste fluxo, o link que **funciona** passa a ser só o padrão: `https://afonsoaugusto.github.io/pinga-ana-adventure-demo/` (podes partilhar/bookmark este).
+Para não haver redirect estranho nem conflito:
 
-Para continuares a usar **afonsorodrigues.com** com o jogo, a solução estável é **subdomínio** (ex.: `pinga.afonsorodrigues.com` com CNAME para `afonsoaugusto.github.io`) e esse nome em **Custom domain** **neste** repo — não o path `/pinga-ana-adventure-demo/` no apex.
+- **Settings → Pages → Custom domain**: remove / deixa vazio neste repositório.
+- Opcional: desliga Pages neste repo se já não precisares do URL `github.io/pinga-ana-adventure-demo/`.
+
+### 4. Branch do site
+
+O workflow publica na branch **`main`** por omissão. Se o teu `.github.io` usar outra (ex.: `master`), cria a variable **`USER_SITE_BRANCH`** com esse nome (e confirma que a expressão no workflow é suportada; se falhar, edita `.github/workflows/pygbag-pages.yml` e fixa `publish_branch`).
+
+Depois de um push com sucesso, o jogo deve abrir em **`http://afonsorodrigues.com/pinga-ana-adventure-demo/`** (e HTTPS quando activares **Enforce HTTPS** no repo `.github.io`).
+
+## Sem `USER_SITE_REPO` (só GitHub Pages deste repo)
+
+Com a variable **vazia / não definida**, o fluxo antigo mantém-se: artefacto → **Deploy pygbag to GitHub Pages** → URL `https://<user>.github.io/pinga-ana-adventure-demo/`.
 
 ## Build local
 
@@ -46,4 +53,4 @@ pip install -r requirements.txt
 python -m pygbag --build .
 ```
 
-Saída em `build/web/` (subir ou publicar só esse conteúdo se for deploy manual).
+Saída em `build/web/`.

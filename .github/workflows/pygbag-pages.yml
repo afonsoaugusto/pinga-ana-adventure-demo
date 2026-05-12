@@ -33,12 +33,21 @@ jobs:
       - name: Disable Jekyll (wasm-friendly static hosting)
         run: touch build/web/.nojekyll
 
-      - uses: actions/upload-pages-artifact@v3
+      - name: Upload web artifact (subpasta no repo .github.io)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pygbag-web
+          path: build/web
+
+      - name: Upload Pages artifact (só deploy do próprio repo)
+        if: ${{ vars.USER_SITE_REPO == '' }}
+        uses: actions/upload-pages-artifact@v3
         with:
           path: build/web
 
-  deploy:
+  deploy-project-pages:
     needs: build
+    if: ${{ vars.USER_SITE_REPO == '' }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -46,3 +55,34 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  deploy-user-site-subpath:
+    needs: build
+    if: ${{ vars.USER_SITE_REPO != '' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: user-site-subpath-deploy
+      cancel-in-progress: true
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pygbag-web
+          path: web
+
+      - id: site_branch
+        env:
+          B: ${{ vars.USER_SITE_BRANCH }}
+        run: |
+          if [ -n "$B" ]; then echo "branch=$B" >> "$GITHUB_OUTPUT"
+          else echo "branch=main" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push para ${{ vars.USER_SITE_REPO }}/pinga-ana-adventure-demo/
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.USER_PAGES_TOKEN }}
+          external_repository: ${{ vars.USER_SITE_REPO }}
+          publish_branch: ${{ steps.site_branch.outputs.branch }}
+          publish_dir: ./web
+          destination_dir: pinga-ana-adventure-demo
+          keep_files: true
