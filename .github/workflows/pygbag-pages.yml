@@ -33,6 +33,15 @@ jobs:
       - name: Disable Jekyll (wasm-friendly static hosting)
         run: touch build/web/.nojekyll
 
+      - name: Verificar bundle pygbag (index.html obrigatório)
+        run: |
+          if [ ! -f build/web/index.html ]; then
+            echo "::error::pygbag não gerou build/web/index.html — nada para publicar."
+            ls -la build/web 2>/dev/null || echo "(pasta build/web inexistente)"
+            exit 1
+          fi
+          echo "Ficheiros em build/web: $(find build/web -type f | wc -l)"
+
       - name: Resumo do modo de deploy
         env:
           REPO: ${{ vars.USER_SITE_REPO }}
@@ -86,6 +95,9 @@ jobs:
           mkdir -p pinga-ana-adventure-demo
           cp -a "${GITHUB_WORKSPACE}/build/web/." "pinga-ana-adventure-demo/"
           touch pinga-ana-adventure-demo/.nojekyll
+          # README.md aqui faz o Jekyll do site servir markdown em vez do jogo (sem index.html visível)
+          rm -f pinga-ana-adventure-demo/README.md
+          test -f pinga-ana-adventure-demo/index.html || { echo "::error::Cópia falhou: falta pinga-ana-adventure-demo/index.html"; ls -la pinga-ana-adventure-demo; exit 1; }
           echo "::group::Conteúdo a publicar"
           echo "ficheiros: $(find pinga-ana-adventure-demo -type f | wc -l)"
           find pinga-ana-adventure-demo -type f | head -40
