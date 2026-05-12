@@ -27,7 +27,7 @@ O GitHub **não** publica o Pages **deste** repositório de projeto nesse URL qu
 | **Variable** (opcional) | `USER_SITE_BRANCH` | Branch onde está o site, por defeito o workflow usa `main` |
 | **Secret** | `USER_PAGES_TOKEN` | Personal Access Token com permissão para dar **push** nesse repo `.github.io` (âmbito `repo` ou pelo menos conteúdo nesse repositório) |
 
-Com `USER_SITE_REPO` **definida**, o workflow **deixa de** usar “GitHub Pages deste repo” e passa a fazer push da pasta `pinga-ana-adventure-demo/` no outro repositório ([peaceiris/actions-gh-pages](https://github.com/peaceiris/actions-gh-pages)).
+Com `USER_SITE_REPO` **definida**, o workflow **deixa de** usar “GitHub Pages deste repo” e faz **clone + `git add -f`** da pasta `pinga-ana-adventure-demo/` no repositório `.github.io`. O `-f` evita que o **`.gitignore` do site** (comum em Jekyll) remova ficheiros do pygbag (`.apk`, `.wasm`, `.js`, etc.); sem isso, às vezes só o `.nojekyll` era comitado.
 
 ### Depois de alterares variables ou o PAT
 

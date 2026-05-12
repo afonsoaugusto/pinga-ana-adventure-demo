@@ -70,14 +70,37 @@ jobs:
 
       - name: Push para ${{ vars.USER_SITE_REPO }}/pinga-ana-adventure-demo/
         if: ${{ vars.USER_SITE_REPO != '' }}
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          personal_token: ${{ secrets.USER_PAGES_TOKEN }}
-          external_repository: ${{ vars.USER_SITE_REPO }}
-          publish_branch: ${{ steps.site_branch.outputs.branch }}
-          publish_dir: ./build/web
-          destination_dir: pinga-ana-adventure-demo
-          keep_files: true
+        env:
+          TOKEN: ${{ secrets.USER_PAGES_TOKEN }}
+          REPO: ${{ vars.USER_SITE_REPO }}
+          BRANCH: ${{ steps.site_branch.outputs.branch }}
+        run: |
+          set -euo pipefail
+          STAGE="$(mktemp -d)"
+          CLONE="${STAGE}/site"
+          AUTH="https://x-access-token:${TOKEN}@github.com/${REPO}.git"
+          git clone "${AUTH}" "${CLONE}"
+          cd "${CLONE}"
+          git checkout "${BRANCH}" 2>/dev/null || git checkout -b "${BRANCH}"
+          rm -rf pinga-ana-adventure-demo
+          mkdir -p pinga-ana-adventure-demo
+          cp -a "${GITHUB_WORKSPACE}/build/web/." "pinga-ana-adventure-demo/"
+          touch pinga-ana-adventure-demo/.nojekyll
+          echo "::group::Conteúdo a publicar"
+          echo "ficheiros: $(find pinga-ana-adventure-demo -type f | wc -l)"
+          find pinga-ana-adventure-demo -type f | head -40
+          echo "::endgroup::"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          # git add --all no repo destino obedece ao .gitignore do site (ex. Jekyll) e omitia .apk/.wasm — -f força a subpasta inteira
+          git add -f pinga-ana-adventure-demo
+          if [ ! -f .nojekyll ]; then touch .nojekyll; git add -f .nojekyll; fi
+          if git diff --staged --quiet; then
+            echo "::notice::Sem alterações para comitar."
+          else
+            git commit -m "deploy pinga-ana-adventure-demo from ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
+            git push "${AUTH}" "${BRANCH}"
+          fi
 
   deploy-project-pages:
     needs: build
