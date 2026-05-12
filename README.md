@@ -36,7 +36,7 @@ Com `USER_SITE_REPO` **definida**, o workflow **deixa de** usar “GitHub Pages 
 1. **Actions** → workflow **Deploy pygbag to GitHub Pages** → **Run workflow** → **Run workflow**, **ou**
 2. Fazer um **push** qualquer à branch `main` (por exemplo um commit vazio: `git commit --allow-empty -m "chore: trigger pages" && git push`).
 
-No log do job **build**, o passo **Resumo do modo de deploy** deve mostrar se `USER_SITE_REPO` foi lido (se continuar “vazio”, a variable está noutro sítio ou com nome errado). No job **deploy-user-site-subpath**, se faltar o PAT, o workflow falha logo com mensagem explícita.
+No log do job **build**, o passo **Resumo do modo de deploy** deve mostrar se `USER_SITE_REPO` foi lido (se continuar “vazio”, a variable está noutro sítio ou com nome errado). Falta de **USER_PAGES_TOKEN** falha ainda no job **build**, antes do push para o `.github.io`.
 
 ### 3. Ajustar Pages **deste** repo do jogo
 
