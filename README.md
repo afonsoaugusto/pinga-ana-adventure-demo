@@ -19,7 +19,7 @@ O GitHub **não** publica o Pages **deste** repositório de projeto nesse URL qu
 
 ### 2. Neste repo (`pinga-ana-adventure-demo`)
 
-**Settings → Secrets and variables → Actions**
+**Settings → Secrets and variables → Actions** (separadores **Secrets** e **Variables** ao **nível do repositório** — não coloques só em *Environments → github-pages*: o workflow usa `vars.USER_SITE_REPO`, que **não** inclui variáveis desse *Environment*.)
 
 | Tipo | Nome | Valor |
 |------|------|--------|
@@ -28,6 +28,15 @@ O GitHub **não** publica o Pages **deste** repositório de projeto nesse URL qu
 | **Secret** | `USER_PAGES_TOKEN` | Personal Access Token com permissão para dar **push** nesse repo `.github.io` (âmbito `repo` ou pelo menos conteúdo nesse repositório) |
 
 Com `USER_SITE_REPO` **definida**, o workflow **deixa de** usar “GitHub Pages deste repo” e passa a fazer push da pasta `pinga-ana-adventure-demo/` no outro repositório ([peaceiris/actions-gh-pages](https://github.com/peaceiris/actions-gh-pages)).
+
+### Depois de alterares variables ou o PAT
+
+**Guardar variables não dispara o workflow.** Tens de:
+
+1. **Actions** → workflow **Deploy pygbag to GitHub Pages** → **Run workflow** → **Run workflow**, **ou**
+2. Fazer um **push** qualquer à branch `main` (por exemplo um commit vazio: `git commit --allow-empty -m "chore: trigger pages" && git push`).
+
+No log do job **build**, o passo **Resumo do modo de deploy** deve mostrar se `USER_SITE_REPO` foi lido (se continuar “vazio”, a variable está noutro sítio ou com nome errado). No job **deploy-user-site-subpath**, se faltar o PAT, o workflow falha logo com mensagem explícita.
 
 ### 3. Ajustar Pages **deste** repo do jogo
 

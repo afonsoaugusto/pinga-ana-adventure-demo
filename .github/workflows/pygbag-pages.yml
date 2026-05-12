@@ -33,6 +33,16 @@ jobs:
       - name: Disable Jekyll (wasm-friendly static hosting)
         run: touch build/web/.nojekyll
 
+      - name: Resumo do modo de deploy
+        env:
+          REPO: ${{ vars.USER_SITE_REPO }}
+        run: |
+          if [ -z "${REPO}" ]; then
+            echo "::notice::USER_SITE_REPO vazio — deploy só via GitHub Pages deste repositório."
+          else
+            echo "::notice::USER_SITE_REPO definido (${REPO}) — o job deploy-user-site-subpath fará push para ${REPO} na pasta pinga-ana-adventure-demo/."
+          fi
+
       - name: Upload web artifact (subpasta no repo .github.io)
         uses: actions/upload-artifact@v4
         with:
@@ -64,6 +74,15 @@ jobs:
       group: user-site-subpath-deploy
       cancel-in-progress: true
     steps:
+      - name: Exige secret USER_PAGES_TOKEN
+        env:
+          TOKEN: ${{ secrets.USER_PAGES_TOKEN }}
+        run: |
+          if [ -z "${TOKEN}" ]; then
+            echo "::error::Define o secret USER_PAGES_TOKEN (PAT com push no repo indicado em USER_SITE_REPO). Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
       - uses: actions/download-artifact@v4
         with:
           name: pygbag-web
