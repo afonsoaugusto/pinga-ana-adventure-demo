@@ -67,7 +67,9 @@ Com a variable **vazia / não definida**, o fluxo antigo mantém-se: artefacto �
 
 ```bash
 pip install -r requirements.txt
-python -m pygbag --build .
+python -m pygbag --build --template ci/default.tmpl --icon ci/favicon.png .
 ```
 
 Saída em `build/web/`.
+
+**Nota:** em `pygbag.ini`, não uses entradas em `ignoreDirs` com **espaços** no caminho (ex.: `/assets/Aseprite file`) — o pygbag aborta antes de gerar `index.html`. O CI usa template e ícone em `ci/` para não depender só do CDN.

@@ -28,7 +28,7 @@ jobs:
         run: pip install pygbag pygame-ce
 
       - name: Build web bundle
-        run: python -m pygbag --build .
+        run: python -m pygbag --build --template ci/default.tmpl --icon ci/favicon.png .
 
       - name: Disable Jekyll (wasm-friendly static hosting)
         run: touch build/web/.nojekyll
