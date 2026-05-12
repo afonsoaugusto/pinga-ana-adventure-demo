@@ -49,7 +49,7 @@ jobs:
           if [ -z "${REPO}" ]; then
             echo "::notice::USER_SITE_REPO vazio — deploy só via GitHub Pages deste repositório."
           else
-            echo "::notice::USER_SITE_REPO definido (${REPO}) — push para ${REPO}/pinga-ana-adventure-demo/ neste mesmo job (sem artefacto entre jobs)."
+            echo "::notice::USER_SITE_REPO definido (${REPO}) — push para ${REPO}/static/pinga-ana-adventure-demo/ neste mesmo job (sem artefacto entre jobs)."
           fi
 
       - name: Upload Pages artifact (só deploy do próprio repo)
@@ -77,7 +77,7 @@ jobs:
             exit 1
           fi
 
-      - name: Push para ${{ vars.USER_SITE_REPO }}/pinga-ana-adventure-demo/
+      - name: Push para ${{ vars.USER_SITE_REPO }}/static/pinga-ana-adventure-demo/
         if: ${{ vars.USER_SITE_REPO != '' }}
         env:
           TOKEN: ${{ secrets.USER_PAGES_TOKEN }}
@@ -91,21 +91,25 @@ jobs:
           git clone "${AUTH}" "${CLONE}"
           cd "${CLONE}"
           git checkout "${BRANCH}" 2>/dev/null || git checkout -b "${BRANCH}"
+          # Local antigo (raiz): Hugo não publica isto — só static/ vai para public/
           rm -rf pinga-ana-adventure-demo
-          mkdir -p pinga-ana-adventure-demo
-          cp -a "${GITHUB_WORKSPACE}/build/web/." "pinga-ana-adventure-demo/"
-          touch pinga-ana-adventure-demo/.nojekyll
+          git add -u -- pinga-ana-adventure-demo 2>/dev/null || true
+          DEST="static/pinga-ana-adventure-demo"
+          rm -rf "${DEST}"
+          mkdir -p "${DEST}"
+          cp -a "${GITHUB_WORKSPACE}/build/web/." "${DEST}/"
+          touch "${DEST}/.nojekyll"
           # README.md aqui faz o Jekyll do site servir markdown em vez do jogo (sem index.html visível)
-          rm -f pinga-ana-adventure-demo/README.md
-          test -f pinga-ana-adventure-demo/index.html || { echo "::error::Cópia falhou: falta pinga-ana-adventure-demo/index.html"; ls -la pinga-ana-adventure-demo; exit 1; }
+          rm -f "${DEST}/README.md"
+          test -f "${DEST}/index.html" || { echo "::error::Cópia falhou: falta ${DEST}/index.html"; ls -la "${DEST}"; exit 1; }
           echo "::group::Conteúdo a publicar"
-          echo "ficheiros: $(find pinga-ana-adventure-demo -type f | wc -l)"
-          find pinga-ana-adventure-demo -type f | head -40
+          echo "ficheiros: $(find "${DEST}" -type f | wc -l)"
+          find "${DEST}" -type f | head -40
           echo "::endgroup::"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
           # git add --all no repo destino obedece ao .gitignore do site (ex. Jekyll) e omitia .apk/.wasm — -f força a subpasta inteira
-          git add -f pinga-ana-adventure-demo
+          git add -f "${DEST}"
           if [ ! -f .nojekyll ]; then touch .nojekyll; git add -f .nojekyll; fi
           if git diff --staged --quiet; then
             echo "::notice::Sem alterações para comitar."

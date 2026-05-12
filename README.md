@@ -10,7 +10,7 @@ No GitHub: **Settings → Pages → Source: GitHub Actions**. Enquanto a origem 
 
 O GitHub **não** publica o Pages **deste** repositório de projeto nesse URL quando o apex `afonsorodrigues.com` já é servido pelo repositório **`<utilizador>.github.io`** (site pessoal na raiz). O redirect pode existir, mas o conteúdo do jogo nunca chega a essa pasta — daí o 404.
 
-**Solução suportada por este repo:** copiar o `build/web` para **dentro** do repo `<utilizador>.github.io`, na pasta **`pinga-ana-adventure-demo/`**, onde o teu domínio já está configurado. O pygbag usa caminhos relativos ao `index.html`, por isso isto funciona nessa subpasta.
+**Solução suportada por este repo:** copiar o `build/web` para **dentro** do repo `<utilizador>.github.io`, na pasta **`static/pinga-ana-adventure-demo/`** (site **Hugo**). O Hugo só publica o que vai para `public/`; tudo em `static/` é copiado tal como está para `public/pinga-ana-adventure-demo/`. Se o bundle ficar na **raiz** do repo, o workflow do Hugo **não** o inclui no deploy — o URL cai no layout do blog (404 ou página vazia com tema). O pygbag usa caminhos relativos ao `index.html`, por isso a subpasta no URL mantém-se a mesma.
 
 ### 1. Repositório `afonsoaugusto.github.io`
 
@@ -27,7 +27,7 @@ O GitHub **não** publica o Pages **deste** repositório de projeto nesse URL qu
 | **Variable** (opcional) | `USER_SITE_BRANCH` | Branch onde está o site, por defeito o workflow usa `main` |
 | **Secret** | `USER_PAGES_TOKEN` | Personal Access Token com permissão para dar **push** nesse repo `.github.io` (âmbito `repo` ou pelo menos conteúdo nesse repositório) |
 
-Com `USER_SITE_REPO` **definida**, o workflow **deixa de** usar “GitHub Pages deste repo” e faz **clone + `git add -f`** da pasta `pinga-ana-adventure-demo/` no repositório `.github.io`. O `-f` evita que o **`.gitignore` do site** (comum em Jekyll) remova ficheiros do pygbag (`.apk`, `.wasm`, `.js`, etc.); sem isso, às vezes só o `.nojekyll` era comitado.
+Com `USER_SITE_REPO` **definida**, o workflow **deixa de** usar “GitHub Pages deste repo” e faz **clone + `git add -f`** da pasta **`static/pinga-ana-adventure-demo/`** no repositório `.github.io`. O `-f` evita que o **`.gitignore` do site** remova ficheiros do pygbag (`.apk`, `.wasm`, `.js`, etc.); sem isso, às vezes só o `.nojekyll` era comitado.
 
 ### Depois de alterares variables ou o PAT
 
@@ -51,13 +51,15 @@ O workflow publica na branch **`main`** por omissão. Se o teu `.github.io` usar
 
 Depois de um push com sucesso, o jogo deve abrir em **`http://afonsorodrigues.com/pinga-ana-adventure-demo/`** (e HTTPS quando activares **Enforce HTTPS** no repo `.github.io`).
 
-### 5. A URL mostra o README (Jekyll) em vez do jogo
+### 5. A URL mostra o README (Jekyll) ou o layout do blog (Hugo) em vez do jogo
 
-No repo **`afonsoaugusto.github.io`**, se existir **`pinga-ana-adventure-demo/README.md`** e **não** existir (ou não for servido) o **`index.html`** do pygbag, o [Jekyll do GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site) transforma esse README em página em `/pinga-ana-adventure-demo/` — vês o texto do README e `<meta name="generator" content="Jekyll" />`.
+- **Jekyll (GitHub Pages “branch”):** se existir **`…/README.md`** na pasta publicada e **não** existir **`index.html`**, o Jekyll pode transformar o README em página.
 
-O workflow **remove `README.md`** dessa pasta em cada deploy e exige **`index.html`** no bundle. Confirma no GitHub que a pasta [`pinga-ana-adventure-demo`](https://github.com/afonsoaugusto/afonsoaugusto.github.io/tree/main/pinga-ana-adventure-demo) contém **`index.html`**, `.apk`/`.tar.gz`, etc. Se só aparecer `.nojekyll`, o deploy do Actions ainda não correu com sucesso ou falhou antes do push.
+- **Hugo (site em `afonsoaugusto.github.io` com Actions):** o deploy publica só o conteúdo de **`public/`** após `hugo`. Ficheiros na **raiz** do repo (ex.: `pinga-ana-adventure-demo/` fora de `static/`) **não** entram no site — o caminho `/pinga-ana-adventure-demo/` fica sem o bundle e vês página do tema (404, lista vazia, etc.). O bundle tem de estar em **`static/pinga-ana-adventure-demo/`** para o Hugo copiar para **`public/pinga-ana-adventure-demo/`**.
 
-Opcional no site Jekyll: ficheiro **`.nojekyll` na raiz** do repo `.github.io` desactiva o Jekyll para **todo** o site (páginas estáticas puras); útil se não precisares de Jekyll no apex.
+O workflow **remove `README.md`** da pasta de deploy em cada job e exige **`index.html`**. Confirma no GitHub que existe [`static/pinga-ana-adventure-demo/index.html`](https://github.com/afonsoaugusto/afonsoaugusto.github.io/tree/main/static/pinga-ana-adventure-demo) (e `.apk`/`.tar.gz`, etc.). Se só aparecer `.nojekyll`, o deploy do Actions ainda não correu com sucesso ou falhou antes do push.
+
+Opcional: **`.nojekyll` na raiz** do repo `.github.io` desactiva o Jekyll para **todo** o site quando a origem do Pages for uma branch (útil em sites estáticos sem Hugo Actions).
 
 ## Sem `USER_SITE_REPO` (só GitHub Pages deste repo)
 
