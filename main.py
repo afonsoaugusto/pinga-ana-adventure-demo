@@ -1,11 +1,98 @@
+import array
 import asyncio
+import io
 import json
+import math
 import random
+import wave
 from pathlib import Path
 
 import pygame
 
+pygame.mixer.pre_init(22050, -16, 2, 1024)
 pygame.init()
+
+
+def _mono16_pcm_to_wav(samples: array.array, sample_rate: int) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(samples.tobytes())
+    buf.seek(0)
+    return buf.read()
+
+
+def _synth_hit_enemy(sr: int = 22050) -> bytes:
+    """Impacto curto: ruído + grave em decaimento (acerto no inimigo)."""
+    dur = 0.075
+    n = max(1, int(sr * dur))
+    out = array.array("h")
+    for i in range(n):
+        t = i / sr
+        env = math.exp(-18.0 * i / n)
+        f = 280.0 * math.exp(-9.0 * t)
+        thump = 0.5 * math.sin(2 * math.pi * f * t)
+        noise = (random.random() * 2.0 - 1.0) * 0.38
+        s = (thump + noise) * env
+        out.append(int(max(-1.0, min(1.0, s)) * 30000))
+    return _mono16_pcm_to_wav(out, sr)
+
+
+def _synth_hurt_player(sr: int = 22050) -> bytes:
+    """Tom mais baixo que desce (levou dano)."""
+    dur = 0.2
+    n = max(1, int(sr * dur))
+    out = array.array("h")
+    for i in range(n):
+        t = i / sr
+        f = 175.0 - 105.0 * (i / n)
+        env = math.sin(math.pi * i / n) ** 1.4
+        s = 0.72 * math.sin(2 * math.pi * f * t) * env
+        out.append(int(max(-1.0, min(1.0, s)) * 30500))
+    return _mono16_pcm_to_wav(out, sr)
+
+
+def _synth_bg_loop(sr: int = 22050) -> bytes:
+    """Loop ambiente suave (acordes graves + tremolo)."""
+    dur = 2.56
+    n = max(1, int(sr * dur))
+    freqs = (98.0, 130.81, 164.81, 196.0)
+    out = array.array("h")
+    edge = max(1, int(sr * 0.05))
+    for i in range(n):
+        t = i / sr
+        trem = 0.82 + 0.18 * math.sin(2 * math.pi * 0.42 * t)
+        s = 0.0
+        for k, f in enumerate(freqs):
+            s += (0.2 / len(freqs)) * math.sin(2 * math.pi * f * t + 0.35 * k)
+        s *= trem
+        fade = 1.0
+        if i < edge:
+            fade = i / edge
+        elif i > n - edge:
+            fade = (n - 1 - i) / max(1, edge - 1)
+        s *= fade
+        out.append(int(max(-1.0, min(1.0, s * 0.5)) * 26000))
+    return _mono16_pcm_to_wav(out, sr)
+
+
+def load_procedural_sounds() -> tuple[pygame.mixer.Sound | None, pygame.mixer.Sound | None, pygame.mixer.Sound | None]:
+    """Sons gerados em memória (sem ficheiros externos). Devolve (hit_inimigo, dano_jogador, musica_fundo)."""
+    try:
+        if pygame.mixer.get_init() is None:
+            pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=1024)
+        pygame.mixer.set_num_channels(16)
+        hit = pygame.mixer.Sound(io.BytesIO(_synth_hit_enemy()))
+        hurt = pygame.mixer.Sound(io.BytesIO(_synth_hurt_player()))
+        bg = pygame.mixer.Sound(io.BytesIO(_synth_bg_loop()))
+        hit.set_volume(0.52)
+        hurt.set_volume(0.62)
+        bg.set_volume(0.2)
+        return hit, hurt, bg
+    except (pygame.error, OSError, ValueError):
+        return None, None, None
 
 WIDTH, HEIGHT = 360, 640
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -427,23 +514,91 @@ class Bullet(pygame.sprite.Sprite):
             self.kill()
 
 
-WORLD_GRID_SIZE = 64
-WORLD_GRID_COLOR = (34, 38, 48)
-WORLD_GRID_ACCENT = (48, 54, 70)
+_SCROLL_TILE_MAIN: pygame.Surface | None = None
+_SCROLL_TILE_FAR: pygame.Surface | None = None
+
+
+def _make_scroll_tile_far(size: int) -> pygame.Surface:
+    """Textura repetível (céu / nébula distante) com período size em x e y."""
+    surf = pygame.Surface((size, size))
+    for y in range(size):
+        for x in range(size):
+            nx = 2 * math.pi * x / size
+            ny = 2 * math.pi * y / size
+            v = (
+                0.34 * math.sin(nx * 1.4) * math.cos(ny * 1.1)
+                + 0.28 * math.sin(nx * 2.8 + ny * 2.0)
+                + 0.22 * math.sin(nx * 2.1 - ny * 2.9)
+            )
+            r = 9 + int(12 * v)
+            g = 11 + int(14 * v)
+            b = 24 + int(22 * v)
+            sp = math.sin(x * 1.731 + y * 2.437)
+            if sp > 0.91:
+                r = min(255, r + 48)
+                g = min(255, g + 52)
+                b = min(255, b + 62)
+            surf.set_at((x, y), (max(0, r), max(0, g), min(255, b)))
+    return surf.convert()
+
+
+def _make_scroll_tile_main(size: int) -> pygame.Surface:
+    """Chão / arena repetível com variação tipo pedra e grelha subtil alinhada ao tile."""
+    surf = pygame.Surface((size, size))
+    for y in range(size):
+        for x in range(size):
+            nx = 2 * math.pi * x / size
+            ny = 2 * math.pi * y / size
+            stone = (
+                0.3 * math.sin(nx * 2) * math.cos(ny * 2)
+                + 0.22 * math.sin(nx * 4 + ny * 3)
+                + 0.2 * math.sin(nx * 6) * math.sin(ny * 2)
+                + 0.16 * math.sin((nx + ny) * 5)
+            )
+            r = 24 + int(26 * stone)
+            g = 28 + int(28 * stone)
+            b = 42 + int(40 * stone)
+            surf.set_at((x, y), (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))))
+    gs = 44
+    if size % gs == 0:
+        line_c = (18, 22, 34)
+        for x in range(0, size + 1, gs):
+            pygame.draw.line(surf, line_c, (x, 0), (x, size), 1)
+        for y in range(0, size + 1, gs):
+            pygame.draw.line(surf, line_c, (0, y), (size, y), 1)
+    return surf.convert()
+
+
+def _scroll_background_tiles() -> tuple[pygame.Surface, pygame.Surface]:
+    global _SCROLL_TILE_MAIN, _SCROLL_TILE_FAR
+    if _SCROLL_TILE_MAIN is None:
+        _SCROLL_TILE_MAIN = _make_scroll_tile_main(176)
+        _SCROLL_TILE_FAR = _make_scroll_tile_far(192)
+    return _SCROLL_TILE_MAIN, _SCROLL_TILE_FAR
+
+
+def _blit_tiled_scroll(
+    surface: pygame.Surface,
+    tile: pygame.Surface,
+    cam_offset: pygame.Vector2,
+    parallax: float,
+) -> None:
+    """Repete `tile` no ecrã; deslocamento derivado de `cam_offset` com factor de parallax."""
+    tw, th = tile.get_size()
+    ox = float(cam_offset.x) * parallax
+    oy = float(cam_offset.y) * parallax
+    start_x = (-int(ox)) % tw
+    start_y = (-int(oy)) % th
+    for x in range(start_x - tw, WIDTH + tw, tw):
+        for y in range(start_y - th, HEIGHT + th, th):
+            surface.blit(tile, (x, y))
 
 
 def draw_world_background(surface: pygame.Surface, cam_offset: pygame.Vector2) -> None:
-    """Desenha uma grelha que rola com a câmara, dando a noção de mundo infinito."""
-    surface.fill(BLACK)
-    gs = WORLD_GRID_SIZE
-    start_x = -int(cam_offset.x) % gs
-    start_y = -int(cam_offset.y) % gs
-    for x in range(start_x - gs, WIDTH + gs, gs):
-        col = WORLD_GRID_ACCENT if ((x + int(cam_offset.x)) // gs) % 4 == 0 else WORLD_GRID_COLOR
-        pygame.draw.line(surface, col, (x, 0), (x, HEIGHT))
-    for y in range(start_y - gs, HEIGHT + gs, gs):
-        col = WORLD_GRID_ACCENT if ((y + int(cam_offset.y)) // gs) % 4 == 0 else WORLD_GRID_COLOR
-        pygame.draw.line(surface, col, (0, y), (WIDTH, y))
+    """Fundo infinito com scroll (camada distante + camada ao ritmo do mundo)."""
+    main_tile, far_tile = _scroll_background_tiles()
+    _blit_tiled_scroll(surface, far_tile, cam_offset, 0.24)
+    _blit_tiled_scroll(surface, main_tile, cam_offset, 1.0)
 
 
 def draw_sprites_with_camera(
@@ -478,6 +633,7 @@ def _character_select_layout(chars: list[dict]) -> list[tuple[pygame.Rect, dict]
 
 
 async def main() -> None:
+    snd_hit, snd_hurt, snd_bg = load_procedural_sounds()
     cfg = load_game_config()
     apply_escala_sprites_from_config(cfg)
     enemies_cfg: dict[str, dict] = cfg["enemies"]
@@ -549,6 +705,8 @@ async def main() -> None:
         game_over = False
         shooting_enabled = True
         game_phase = "playing"
+        if snd_bg is not None and snd_bg.get_num_channels() == 0:
+            snd_bg.play(loops=-1)
 
     def reset_run() -> None:
         nonlocal player, all_sprites, enemies, bullets, target_move_pos
@@ -675,6 +833,8 @@ async def main() -> None:
                 if not struck:
                     continue
                 bullet.kill()
+                if snd_hit is not None:
+                    snd_hit.play()
                 enemy = struck[0]
                 if enemy.take_bullet_hit(bullet.damage):
                     enemy.kill()
@@ -682,6 +842,8 @@ async def main() -> None:
 
             if pygame.sprite.spritecollide(player, enemies, False):
                 player_hp -= 1
+                if snd_hurt is not None:
+                    snd_hurt.play()
                 for e in enemies:
                     e.kill()
                 for b in list(bullets):
