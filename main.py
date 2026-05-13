@@ -12,9 +12,14 @@ import pygame
 
 
 def _compute_runs_in_browser_wasm() -> bool:
-    """pygbag: emscripten / wasi / wasm em machine(); pyodide em sys.modules após pygame.init."""
+    """pygbag/pyodide: emscripten/wasi, módulo js, pyodide em sys.modules, ou wasm em machine()."""
     if sys.platform in ("emscripten", "wasi"):
         return True
+    try:
+        __import__("js")
+        return True
+    except ImportError:
+        pass
     for mod in sys.modules:
         if mod.startswith("pyodide"):
             return True
@@ -124,6 +129,14 @@ WIDTH, HEIGHT = 360, 640
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Pinga Ana Adventure")
 clock = pygame.time.Clock()
+
+
+def _present_display() -> None:
+    """No browser o canvas SDL costuma actualizar-se melhor com update() que com flip()."""
+    if _RUNS_IN_BROWSER_WASM:
+        pygame.display.update()
+    else:
+        pygame.display.flip()
 
 
 def _first_square_frame(surf: pygame.Surface) -> pygame.Surface:
@@ -368,6 +381,8 @@ def _load_scaled_png(filename: str, size: tuple[int, int]) -> pygame.Surface | N
             surf = pygame.image.load(str(path)).convert_alpha()
             surf = _first_square_frame(surf)
             surf = _crop_to_opaque_bounds(surf)
+            if _RUNS_IN_BROWSER_WASM:
+                return pygame.transform.scale(surf, size)
             return pygame.transform.smoothscale(surf, size)
         except (FileNotFoundError, OSError, pygame.error, ValueError):
             continue
@@ -661,10 +676,27 @@ def _blit_tiled_scroll(
             surface.blit(tile, (x, y))
 
 
+def _draw_world_background_wasm(surface: pygame.Surface, cam_offset: pygame.Vector2) -> None:
+    """Fundo com scroll e poucos draw.rect (evita dezenas de draw.line por frame no canvas WASM)."""
+    surface.fill(BLACK)
+    bw = 40
+    start_x = (-int(cam_offset.x)) % (bw * 2)
+    for x in range(start_x - bw * 2, WIDTH + bw * 2, bw):
+        i = (x + int(cam_offset.x)) // bw
+        c = (32, 36, 48) if i % 2 == 0 else (22, 26, 36)
+        pygame.draw.rect(surface, c, (x, 0, bw, HEIGHT))
+    band_h = 10
+    start_y = (-int(cam_offset.y)) % (band_h * 2)
+    for y in range(start_y - band_h * 2, HEIGHT + band_h * 2, band_h):
+        j = (y + int(cam_offset.y)) // band_h
+        if j % 2 == 1:
+            pygame.draw.rect(surface, (18, 22, 30), (0, y, WIDTH, band_h))
+
+
 def draw_world_background(surface: pygame.Surface, cam_offset: pygame.Vector2) -> None:
-    """Fundo infinito com scroll. No browser (pygbag) usa só grelha — texturas RGB costumam falhar ou ficar em branco."""
+    """Fundo infinito com scroll. No browser: rectas leves + update(); no desktop: tiles RGB."""
     if _RUNS_IN_BROWSER_WASM:
-        _draw_world_background_grid(surface, cam_offset)
+        _draw_world_background_wasm(surface, cam_offset)
         return
     main_tile, far_tile = _scroll_background_tiles()
     if main_tile is None or far_tile is None:
@@ -1008,7 +1040,7 @@ async def main() -> None:
             clock.tick(0)
         else:
             clock.tick(60)
-        pygame.display.flip()
+        _present_display()
         await asyncio.sleep(0)
 
 
