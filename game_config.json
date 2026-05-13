@@ -14,7 +14,7 @@
       "sprite": "Characters(100x100)/Soldier/Soldier/Soldier-Idle.png",
       "resistencia": 3,
       "velocidade": 0.52,
-      "comeca_apos_pontos": 10
+      "comeca_apos_pontos": 20
     }
   },
   "spawn": {
@@ -25,7 +25,7 @@
   "characters": [
     {
       "id": "arthas",
-      "sprite": "player_arthas.png",
+      "sprite": "novos/player_arthas.png",
       "name": "Arthas",
       "title": "O Pirata",
       "forca": 1,
@@ -35,7 +35,7 @@
     },
     {
       "id": "penetrus",
-      "sprite": "player_penetrus.png",
+      "sprite": "novos/player_penetrus.png",
       "name": "Penetrus",
       "title": "Mago",
       "forca": 2,
@@ -45,7 +45,7 @@
     },
     {
       "id": "uni_orc",
-      "sprite": "player_uni_orc.png",
+      "sprite": "novos/player_uni_orc.png",
       "name": "Uni-Orc",
       "title": "Orc Unicórnio",
       "forca": 1,
@@ -55,7 +55,7 @@
     },
     {
       "id": "red_oni",
-      "sprite": "player_red_oni.png",
+      "sprite": "novos/player_red_oni.png",
       "name": "Red Oni",
       "title": "Demônio japonês",
       "forca": 1,
@@ -65,7 +65,7 @@
     },
     {
       "id": "sr_baldius",
-      "sprite": "player_sr_baldius.png",
+      "sprite": "novos/player_sr_baldius.png",
       "name": "Sr. Baldius",
       "title": "Soldado Templário",
       "forca": 2,

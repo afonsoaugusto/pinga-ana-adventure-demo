@@ -416,7 +416,7 @@ def _crop_to_opaque_bounds(surf: pygame.Surface) -> pygame.Surface:
 DEFAULT_CHARACTERS: list[dict] = [
     {
         "id": "arthas",
-        "sprite": "player_arthas.png",
+        "sprite": "novos/player_arthas.png",
         "name": "Arthas",
         "title": "O Pirata",
         "forca": 1,
@@ -426,7 +426,7 @@ DEFAULT_CHARACTERS: list[dict] = [
     },
     {
         "id": "penetrus",
-        "sprite": "player_penetrus.png",
+        "sprite": "novos/player_penetrus.png",
         "name": "Penetrus",
         "title": "Mago",
         "forca": 2,
@@ -436,7 +436,7 @@ DEFAULT_CHARACTERS: list[dict] = [
     },
     {
         "id": "uni_orc",
-        "sprite": "player_uni_orc.png",
+        "sprite": "novos/player_uni_orc.png",
         "name": "Uni-Orc",
         "title": "Orc Unicórnio",
         "forca": 1,
@@ -446,7 +446,7 @@ DEFAULT_CHARACTERS: list[dict] = [
     },
     {
         "id": "red_oni",
-        "sprite": "player_red_oni.png",
+        "sprite": "novos/player_red_oni.png",
         "name": "Red Oni",
         "title": "Demônio japonês",
         "forca": 2,
@@ -456,7 +456,7 @@ DEFAULT_CHARACTERS: list[dict] = [
     },
     {
         "id": "sr_baldius",
-        "sprite": "player_sr_baldius.png",
+        "sprite": "novos/player_sr_baldius.png",
         "name": "Sr. Baldius",
         "title": "Soldado Templário",
         "forca": 2,
@@ -493,7 +493,7 @@ def _normalize_character(raw: dict) -> dict | None:
     if isinstance(sprite_raw, str) and sprite_raw.strip():
         sprite = sprite_raw.strip()
     else:
-        sprite = f"player_{cid_key}.png"
+        sprite = f"novos/player_{cid_key}.png"
 
     return {
         "id": cid_key,
@@ -530,7 +530,7 @@ DEFAULT_ENEMIES_MERGE: dict[str, dict] = {
         "sprite": "Characters(100x100)/Soldier/Soldier/Soldier-Idle.png",
         "resistencia": 2,
         "velocidade": 0.58,
-        "comeca_apos_pontos": 10,
+        "comeca_apos_pontos": 20,
     },
 }
 
@@ -622,9 +622,21 @@ def load_game_config() -> dict:
 
 
 def _load_scaled_png(filename: str, size: tuple[int, int]) -> pygame.Surface | None:
-    """Local: main.py na raiz e PNGs em assets/. Web (pygbag): main.py e PNGs no mesmo assets/."""
+    """Local: main.py na raiz e PNGs em assets/ (e subpastas como novos/, backup/). Web (pygbag): idem."""
     base = Path(__file__).resolve().parent
-    for path in (base / filename, base / "assets" / filename):
+    rel = Path(filename)
+    candidates: list[Path] = [base / filename, base / "assets" / filename]
+    # Mesmo nome em assets/backup/ (cópias antigas) se o caminho principal falhar
+    if rel.name:
+        candidates.append(base / "assets" / "backup" / rel.name)
+    seen: set[str] = set()
+    ordered: list[Path] = []
+    for path in candidates:
+        key = str(path.resolve())
+        if key not in seen:
+            seen.add(key)
+            ordered.append(path)
+    for path in ordered:
         try:
             surf = pygame.image.load(str(path)).convert_alpha()
             surf = _first_square_frame(surf)
