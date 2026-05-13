@@ -1,0 +1,10 @@
+{
+  "player": {
+    "hits_until_death": 1
+  },
+  "enemies": {
+    "orc": {
+      "hits_to_destroy": 2
+    }
+  }
+}
