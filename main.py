@@ -4,8 +4,8 @@ import io
 import json
 import math
 import random
+import struct
 import sys
-import wave
 from pathlib import Path
 
 import pygame
@@ -43,14 +43,30 @@ if _RUNS_IN_BROWSER_WASM:
 
 
 def _mono16_pcm_to_wav(samples: array.array, sample_rate: int) -> bytes:
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(samples.tobytes())
-    buf.seek(0)
-    return buf.read()
+    """PCM mono 16-bit LE → ficheiro WAV em bytes.
+
+    Não usar o stdlib `wave`: no pygbag o PEP 723 tenta `pip install wave` e instala
+    um pacote PyPI incompatível, quebrando o arranque no browser.
+    """
+    pcm = samples.tobytes()
+    n = len(pcm)
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + n,
+        b"WAVE",
+        b"fmt ",
+        16,
+        1,
+        1,
+        sample_rate,
+        sample_rate * 2,
+        2,
+        16,
+        b"data",
+        n,
+    )
+    return header + pcm
 
 
 def _synth_hit_enemy(sr: int = 22050) -> bytes:
