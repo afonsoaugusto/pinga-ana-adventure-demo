@@ -120,23 +120,70 @@ def _synth_bg_loop(sr: int = 22050) -> bytes:
     return _mono16_pcm_to_wav(out, sr)
 
 
-def load_procedural_sounds() -> tuple[pygame.mixer.Sound | None, pygame.mixer.Sound | None, pygame.mixer.Sound | None]:
-    """Sons gerados em memória (sem ficheiros externos). Devolve (hit_inimigo, dano_jogador, musica_fundo)."""
+def load_procedural_sounds(
+    *,
+    force_reinit: bool = False,
+    sample_rate: int | None = None,
+) -> tuple[pygame.mixer.Sound | None, pygame.mixer.Sound | None, pygame.mixer.Sound | None]:
+    """Sons gerados em memória (sem ficheiros externos). Devolve (hit_inimigo, dano_jogador, musica_fundo).
+
+    `force_reinit`: no browser, usar após um toque — Chrome/Android mantém o AudioContext
+    suspenso se o mixer for inicializado antes do gesto do utilizador.
+    """
+    sr = int(sample_rate) if sample_rate else (44100 if _RUNS_IN_BROWSER_WASM else 22050)
     try:
+        if force_reinit and pygame.mixer.get_init() is not None:
+            pygame.mixer.quit()
         if pygame.mixer.get_init() is None:
-            # Buffer maior no browser reduz cortes no ScriptProcessor/WebAudio antigo.
-            buf = 2048 if _RUNS_IN_BROWSER_WASM else 1024
-            pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=buf)
+            buf = 4096 if _RUNS_IN_BROWSER_WASM else 1024
+            pygame.mixer.init(frequency=sr, size=-16, channels=2, buffer=buf)
         pygame.mixer.set_num_channels(16)
-        hit = pygame.mixer.Sound(io.BytesIO(_synth_hit_enemy()))
-        hurt = pygame.mixer.Sound(io.BytesIO(_synth_hurt_player()))
-        bg = pygame.mixer.Sound(io.BytesIO(_synth_bg_loop()))
+        hit = pygame.mixer.Sound(io.BytesIO(_synth_hit_enemy(sr)))
+        hurt = pygame.mixer.Sound(io.BytesIO(_synth_hurt_player(sr)))
+        bg = pygame.mixer.Sound(io.BytesIO(_synth_bg_loop(sr)))
         hit.set_volume(0.52)
         hurt.set_volume(0.62)
         bg.set_volume(0.2)
         return hit, hurt, bg
     except (pygame.error, OSError, ValueError, TypeError):
         return None, None, None
+
+
+def _resume_browser_audio_context() -> None:
+    """Tenta reactivar o WebAudio do SDL2 (Chrome/Android bloqueia até haver input)."""
+    if not _RUNS_IN_BROWSER_WASM:
+        return
+    js = (
+        "(function(){try{"
+        "var g=typeof globalThis!=='undefined'?globalThis:self;"
+        "var M=g.Module||(typeof Module!=='undefined'?Module:null);"
+        "var c=M&&M.SDL2&&M.SDL2.audioContext;"
+        "if(c&&typeof c.resume==='function'&&c.state==='suspended'){c.resume();}"
+        "}catch(e){}})();"
+    )
+    try:
+        import emscripten  # type: ignore[import-not-found, unused-import]  # noqa: PLC0415
+
+        _run = getattr(emscripten, "run_script", None) or getattr(emscripten, "run_js", None)
+        if _run:
+            _run(js)
+            return
+    except Exception:
+        pass
+    try:
+        jsm = __import__("js")
+        if hasattr(jsm, "eval"):
+            jsm.eval(js)
+            return
+    except Exception:
+        pass
+    try:
+        from platform import window  # type: ignore[import-untyped]
+
+        if hasattr(window, "eval"):
+            window.eval(js)
+    except Exception:
+        pass
 
 WIDTH, HEIGHT = 360, 640
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -758,7 +805,14 @@ def _character_select_layout(chars: list[dict]) -> list[tuple[pygame.Rect, dict]
 
 
 async def main() -> None:
-    snd_hit, snd_hurt, snd_bg = load_procedural_sounds()
+    # No browser: não inicializar o mixer antes de um toque — Android/Chrome deixa o AudioContext suspenso.
+    snd_hit: pygame.mixer.Sound | None
+    snd_hurt: pygame.mixer.Sound | None
+    snd_bg: pygame.mixer.Sound | None
+    if _RUNS_IN_BROWSER_WASM:
+        snd_hit = snd_hurt = snd_bg = None
+    else:
+        snd_hit, snd_hurt, snd_bg = load_procedural_sounds()
     cfg = load_game_config()
     apply_escala_sprites_from_config(cfg)
     enemies_cfg: dict[str, dict] = cfg["enemies"]
@@ -820,6 +874,7 @@ async def main() -> None:
         nonlocal game_phase, selected_character, player_max_hp, player, all_sprites
         nonlocal enemies, bullets, target_move_pos, spawn_timer, spawn_interval_frames, shoot_timer
         nonlocal score, player_hp, game_over, shooting_enabled
+        nonlocal snd_hit, snd_hurt, snd_bg
         selected_character = character
         player_max_hp = max(1, int(character.get("resistencia", 1)))
         player = Player(character)
@@ -835,6 +890,10 @@ async def main() -> None:
         game_over = False
         shooting_enabled = True
         game_phase = "playing"
+        if _RUNS_IN_BROWSER_WASM:
+            _resume_browser_audio_context()
+            snd_hit, snd_hurt, snd_bg = load_procedural_sounds(force_reinit=True)
+            _resume_browser_audio_context()
         if snd_bg is not None and snd_bg.get_num_channels() == 0:
             try:
                 snd_bg.play(loops=-1)
@@ -968,6 +1027,8 @@ async def main() -> None:
                 bullet.kill()
                 if snd_hit is not None:
                     try:
+                        if _RUNS_IN_BROWSER_WASM:
+                            _resume_browser_audio_context()
                         snd_hit.play()
                     except pygame.error:
                         pass
@@ -980,6 +1041,8 @@ async def main() -> None:
                 player_hp -= 1
                 if snd_hurt is not None:
                     try:
+                        if _RUNS_IN_BROWSER_WASM:
+                            _resume_browser_audio_context()
                         snd_hurt.play()
                     except pygame.error:
                         pass
