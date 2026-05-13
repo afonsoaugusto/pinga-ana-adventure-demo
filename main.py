@@ -10,12 +10,27 @@ from pathlib import Path
 
 import pygame
 
-# Mixer/WebAudio em pygbag costuma falhar ou bloquear o loop no mobile; sem áudio no WASM.
-_IS_EMSCRIPTEN = sys.platform == "emscripten"
-if not _IS_EMSCRIPTEN:
-    pygame.mixer.pre_init(22050, -16, 2, 1024)
+
+def _compute_runs_in_browser_wasm() -> bool:
+    """pygbag: emscripten / wasi / wasm em machine(); pyodide em sys.modules após pygame.init."""
+    if sys.platform in ("emscripten", "wasi"):
+        return True
+    for mod in sys.modules:
+        if mod.startswith("pyodide"):
+            return True
+    try:
+        import platform as _plt
+
+        return "wasm" in _plt.machine().lower()
+    except Exception:
+        return False
+
+
 pygame.init()
-if _IS_EMSCRIPTEN:
+
+_RUNS_IN_BROWSER_WASM = _compute_runs_in_browser_wasm()
+
+if _RUNS_IN_BROWSER_WASM:
     try:
         pygame.mixer.quit()
     except pygame.error:
@@ -89,7 +104,7 @@ def _synth_bg_loop(sr: int = 22050) -> bytes:
 
 def load_procedural_sounds() -> tuple[pygame.mixer.Sound | None, pygame.mixer.Sound | None, pygame.mixer.Sound | None]:
     """Sons gerados em memória (sem ficheiros externos). Devolve (hit_inimigo, dano_jogador, musica_fundo)."""
-    if _IS_EMSCRIPTEN:
+    if _RUNS_IN_BROWSER_WASM:
         return None, None, None
     try:
         if pygame.mixer.get_init() is None:
@@ -527,6 +542,25 @@ class Bullet(pygame.sprite.Sprite):
 
 _SCROLL_TILE_MAIN: pygame.Surface | None = None
 _SCROLL_TILE_FAR: pygame.Surface | None = None
+_SCROLL_BG_USE_GRID_FALLBACK = False
+
+_WORLD_GRID_FALLBACK = 64
+_WORLD_GRID_COLOR = (34, 38, 48)
+_WORLD_GRID_ACCENT = (48, 54, 70)
+
+
+def _draw_world_background_grid(surface: pygame.Surface, cam_offset: pygame.Vector2) -> None:
+    """Fundo a grelha (fallback se texturas RGB falharem no browser)."""
+    surface.fill(BLACK)
+    gs = _WORLD_GRID_FALLBACK
+    start_x = -int(cam_offset.x) % gs
+    start_y = -int(cam_offset.y) % gs
+    for x in range(start_x - gs, WIDTH + gs, gs):
+        col = _WORLD_GRID_ACCENT if ((x + int(cam_offset.x)) // gs) % 4 == 0 else _WORLD_GRID_COLOR
+        pygame.draw.line(surface, col, (x, 0), (x, HEIGHT))
+    for y in range(start_y - gs, HEIGHT + gs, gs):
+        col = _WORLD_GRID_ACCENT if ((y + int(cam_offset.y)) // gs) % 4 == 0 else _WORLD_GRID_COLOR
+        pygame.draw.line(surface, col, (0, y), (WIDTH, y))
 
 
 def _surface_from_rgb_buffer(size: int, rgb: bytearray) -> pygame.Surface:
@@ -595,11 +629,18 @@ def _make_scroll_tile_main(size: int) -> pygame.Surface:
     return surf
 
 
-def _scroll_background_tiles() -> tuple[pygame.Surface, pygame.Surface]:
-    global _SCROLL_TILE_MAIN, _SCROLL_TILE_FAR
+def _scroll_background_tiles() -> tuple[pygame.Surface | None, pygame.Surface | None]:
+    global _SCROLL_TILE_MAIN, _SCROLL_TILE_FAR, _SCROLL_BG_USE_GRID_FALLBACK
+    if _SCROLL_BG_USE_GRID_FALLBACK:
+        return None, None
     if _SCROLL_TILE_MAIN is None:
-        _SCROLL_TILE_MAIN = _make_scroll_tile_main(176)
-        _SCROLL_TILE_FAR = _make_scroll_tile_far(192)
+        try:
+            _SCROLL_TILE_MAIN = _make_scroll_tile_main(176)
+            _SCROLL_TILE_FAR = _make_scroll_tile_far(192)
+        except (pygame.error, ValueError, TypeError, MemoryError, RuntimeError):
+            _SCROLL_BG_USE_GRID_FALLBACK = True
+            _SCROLL_TILE_MAIN = None
+            _SCROLL_TILE_FAR = None
     return _SCROLL_TILE_MAIN, _SCROLL_TILE_FAR
 
 
@@ -621,10 +662,23 @@ def _blit_tiled_scroll(
 
 
 def draw_world_background(surface: pygame.Surface, cam_offset: pygame.Vector2) -> None:
-    """Fundo infinito com scroll (camada distante + camada ao ritmo do mundo)."""
+    """Fundo infinito com scroll. No browser (pygbag) usa só grelha — texturas RGB costumam falhar ou ficar em branco."""
+    if _RUNS_IN_BROWSER_WASM:
+        _draw_world_background_grid(surface, cam_offset)
+        return
     main_tile, far_tile = _scroll_background_tiles()
-    _blit_tiled_scroll(surface, far_tile, cam_offset, 0.24)
-    _blit_tiled_scroll(surface, main_tile, cam_offset, 1.0)
+    if main_tile is None or far_tile is None:
+        _draw_world_background_grid(surface, cam_offset)
+        return
+    try:
+        _blit_tiled_scroll(surface, far_tile, cam_offset, 0.24)
+        _blit_tiled_scroll(surface, main_tile, cam_offset, 1.0)
+    except (pygame.error, TypeError, ValueError):
+        global _SCROLL_BG_USE_GRID_FALLBACK, _SCROLL_TILE_MAIN, _SCROLL_TILE_FAR
+        _SCROLL_BG_USE_GRID_FALLBACK = True
+        _SCROLL_TILE_MAIN = None
+        _SCROLL_TILE_FAR = None
+        _draw_world_background_grid(surface, cam_offset)
 
 
 def draw_sprites_with_camera(
@@ -708,9 +762,10 @@ async def main() -> None:
         str(ch["id"]): _load_character_portrait(ch, (_thumb_side, _thumb_side)) for ch in characters
     }
 
-    # Constrói tiles de fundo já no menu (evita bloqueio longo no 1.º frame após toque, em WASM).
+    # Texturas de fundo (só desktop); no browser a grelha é gerada em draw_world_background.
     await asyncio.sleep(0)
-    _scroll_background_tiles()
+    if not _RUNS_IN_BROWSER_WASM:
+        _scroll_background_tiles()
 
     CARD_BG = (38, 42, 52)
     CARD_LINE = (72, 78, 92)
@@ -736,7 +791,10 @@ async def main() -> None:
         shooting_enabled = True
         game_phase = "playing"
         if snd_bg is not None and snd_bg.get_num_channels() == 0:
-            snd_bg.play(loops=-1)
+            try:
+                snd_bg.play(loops=-1)
+            except pygame.error:
+                pass
 
     def reset_run() -> None:
         nonlocal player, all_sprites, enemies, bullets, target_move_pos
@@ -864,7 +922,10 @@ async def main() -> None:
                     continue
                 bullet.kill()
                 if snd_hit is not None:
-                    snd_hit.play()
+                    try:
+                        snd_hit.play()
+                    except pygame.error:
+                        pass
                 enemy = struck[0]
                 if enemy.take_bullet_hit(bullet.damage):
                     enemy.kill()
@@ -873,7 +934,10 @@ async def main() -> None:
             if pygame.sprite.spritecollide(player, enemies, False):
                 player_hp -= 1
                 if snd_hurt is not None:
-                    snd_hurt.play()
+                    try:
+                        snd_hurt.play()
+                    except pygame.error:
+                        pass
                 for e in enemies:
                     e.kill()
                 for b in list(bullets):
@@ -940,10 +1004,12 @@ async def main() -> None:
                 hint = font_btn.render("Clique ou toque para recomeçar", True, (190, 190, 200))
                 screen.blit(hint, hint.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 24)))
 
+        if _RUNS_IN_BROWSER_WASM:
+            clock.tick(0)
+        else:
+            clock.tick(60)
         pygame.display.flip()
-
         await asyncio.sleep(0)
-        clock.tick(60)
 
 
 asyncio.run(main())
