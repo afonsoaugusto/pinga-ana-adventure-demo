@@ -4,13 +4,22 @@ import io
 import json
 import math
 import random
+import sys
 import wave
 from pathlib import Path
 
 import pygame
 
-pygame.mixer.pre_init(22050, -16, 2, 1024)
+# Mixer/WebAudio em pygbag costuma falhar ou bloquear o loop no mobile; sem áudio no WASM.
+_IS_EMSCRIPTEN = sys.platform == "emscripten"
+if not _IS_EMSCRIPTEN:
+    pygame.mixer.pre_init(22050, -16, 2, 1024)
 pygame.init()
+if _IS_EMSCRIPTEN:
+    try:
+        pygame.mixer.quit()
+    except pygame.error:
+        pass
 
 
 def _mono16_pcm_to_wav(samples: array.array, sample_rate: int) -> bytes:
@@ -80,6 +89,8 @@ def _synth_bg_loop(sr: int = 22050) -> bytes:
 
 def load_procedural_sounds() -> tuple[pygame.mixer.Sound | None, pygame.mixer.Sound | None, pygame.mixer.Sound | None]:
     """Sons gerados em memória (sem ficheiros externos). Devolve (hit_inimigo, dano_jogador, musica_fundo)."""
+    if _IS_EMSCRIPTEN:
+        return None, None, None
     try:
         if pygame.mixer.get_init() is None:
             pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=1024)
@@ -518,9 +529,16 @@ _SCROLL_TILE_MAIN: pygame.Surface | None = None
 _SCROLL_TILE_FAR: pygame.Surface | None = None
 
 
+def _surface_from_rgb_buffer(size: int, rgb: bytearray) -> pygame.Surface:
+    """Uma cópia para textura — evita `set_at` por pixel (muito lento em pygbag/mobile)."""
+    surf = pygame.image.frombytes(bytes(rgb), (size, size), "RGB")
+    return surf.convert()
+
+
 def _make_scroll_tile_far(size: int) -> pygame.Surface:
     """Textura repetível (céu / nébula distante) com período size em x e y."""
-    surf = pygame.Surface((size, size))
+    buf = bytearray(size * size * 3)
+    i = 0
     for y in range(size):
         for x in range(size):
             nx = 2 * math.pi * x / size
@@ -538,13 +556,17 @@ def _make_scroll_tile_far(size: int) -> pygame.Surface:
                 r = min(255, r + 48)
                 g = min(255, g + 52)
                 b = min(255, b + 62)
-            surf.set_at((x, y), (max(0, r), max(0, g), min(255, b)))
-    return surf.convert()
+            buf[i] = max(0, r)
+            buf[i + 1] = max(0, g)
+            buf[i + 2] = min(255, b)
+            i += 3
+    return _surface_from_rgb_buffer(size, buf)
 
 
 def _make_scroll_tile_main(size: int) -> pygame.Surface:
     """Chão / arena repetível com variação tipo pedra e grelha subtil alinhada ao tile."""
-    surf = pygame.Surface((size, size))
+    buf = bytearray(size * size * 3)
+    i = 0
     for y in range(size):
         for x in range(size):
             nx = 2 * math.pi * x / size
@@ -558,7 +580,11 @@ def _make_scroll_tile_main(size: int) -> pygame.Surface:
             r = 24 + int(26 * stone)
             g = 28 + int(28 * stone)
             b = 42 + int(40 * stone)
-            surf.set_at((x, y), (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))))
+            buf[i] = max(0, min(255, r))
+            buf[i + 1] = max(0, min(255, g))
+            buf[i + 2] = max(0, min(255, b))
+            i += 3
+    surf = _surface_from_rgb_buffer(size, buf)
     gs = 44
     if size % gs == 0:
         line_c = (18, 22, 34)
@@ -566,7 +592,7 @@ def _make_scroll_tile_main(size: int) -> pygame.Surface:
             pygame.draw.line(surf, line_c, (x, 0), (x, size), 1)
         for y in range(0, size + 1, gs):
             pygame.draw.line(surf, line_c, (0, y), (size, y), 1)
-    return surf.convert()
+    return surf
 
 
 def _scroll_background_tiles() -> tuple[pygame.Surface, pygame.Surface]:
@@ -681,6 +707,10 @@ async def main() -> None:
     select_portraits: dict[str, pygame.Surface] = {
         str(ch["id"]): _load_character_portrait(ch, (_thumb_side, _thumb_side)) for ch in characters
     }
+
+    # Constrói tiles de fundo já no menu (evita bloqueio longo no 1.º frame após toque, em WASM).
+    await asyncio.sleep(0)
+    _scroll_background_tiles()
 
     CARD_BG = (38, 42, 52)
     CARD_LINE = (72, 78, 92)
