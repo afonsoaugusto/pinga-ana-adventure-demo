@@ -1,5 +1,6 @@
 import array
 import asyncio
+import base64
 import io
 import json
 import math
@@ -12,7 +13,8 @@ import pygame
 
 
 def _compute_runs_in_browser_wasm() -> bool:
-    """pygbag/pyodide: emscripten/wasi, módulo js, pyodide em sys.modules, ou wasm em machine()."""
+    """Browser/pygbag: não usar import platform.machine() — pygame já carrega o stdlib platform
+    e quebra `from platform import window` da documentação pygame-web."""
     if sys.platform in ("emscripten", "wasi"):
         return True
     try:
@@ -23,22 +25,121 @@ def _compute_runs_in_browser_wasm() -> bool:
     for mod in sys.modules:
         if mod.startswith("pyodide"):
             return True
-    try:
-        import platform as _plt
-
-        return "wasm" in _plt.machine().lower()
-    except Exception:
-        return False
+    return False
 
 
 pygame.init()
 
 _RUNS_IN_BROWSER_WASM = _compute_runs_in_browser_wasm()
 
-# No WASM não usamos pygame.mixer.Sound (OOB no Chrome); som = Web Audio (`_wasm_web_*`).
+# No WASM não usamos pygame.mixer.Sound (OOB no Chrome). Som: Web Audio + fallback HTMLAudioElement (data URL).
 
 _WASM_WEB_AC: object | None = None
 _WASM_WEB_BG: tuple[object, object] | None = None
+_WASM_HTML5_BG: object | None = None
+
+
+def _wasm_tiny_wav(freq_hz: float, duration_ms: int, sample_rate: int = 11025) -> bytes:
+    """WAV curto para data:audio/wav;base64 (HTML5 Audio no Chrome mobile)."""
+    n = max(1, int(sample_rate * duration_ms / 1000))
+    out = array.array("h")
+    for i in range(n):
+        t = i / sample_rate
+        a = min(1.0, i / max(1, int(n * 0.08)))
+        b = min(1.0, (n - 1 - i) / max(1, int(n * 0.25)))
+        env = a * b
+        v = math.sin(2 * math.pi * freq_hz * t) * env
+        out.append(int(max(-1.0, min(1.0, v)) * 32000))
+    return _mono16_pcm_to_wav(out, sample_rate)
+
+
+def _wasm_soft_loop_wav(sample_rate: int = 8000, duration_s: float = 1.2) -> bytes:
+    """Loop curto e leve para música de fundo em base64."""
+    n = max(1, int(sample_rate * duration_s))
+    out = array.array("h")
+    for i in range(n):
+        t = i / sample_rate
+        s = 0.22 * math.sin(2 * math.pi * 65.0 * t)
+        s += 0.14 * math.sin(2 * math.pi * 98.0 * t + 0.3)
+        s *= 0.55 + 0.45 * math.sin(2 * math.pi * 0.35 * t)
+        env = min(1.0, i / max(1, int(n * 0.05))) * min(1.0, (n - 1 - i) / max(1, int(n * 0.05)))
+        out.append(int(max(-1.0, min(1.0, s * env)) * 12000))
+    return _mono16_pcm_to_wav(out, sample_rate)
+
+
+def _wasm_js_audio_ctor() -> object | None:
+    try:
+        from js import Audio  # type: ignore[import-not-found]
+
+        return Audio
+    except Exception:
+        pass
+    try:
+        j = __import__("js")
+        return getattr(j, "Audio", None)
+    except Exception:
+        return None
+
+
+def _wasm_html5_audio_attach(el: object, *, append_to_dom: bool) -> None:
+    """playsinline ajuda iOS; append ao body só para loop (um nó) — evita fugas nos SFX."""
+    try:
+        el.setAttribute("playsinline", "")
+        el.setAttribute("webkit-playsinline", "")
+    except Exception:
+        pass
+    if not append_to_dom:
+        return
+    try:
+        from js import document  # type: ignore[import-not-found]
+
+        b = document.body
+        if b is not None and hasattr(b, "appendChild"):
+            b.appendChild(el)
+    except Exception:
+        pass
+
+
+def _wasm_play_wav_html5(
+    wav: bytes, *, volume: float = 0.5, loop: bool = False, append_to_dom: bool | None = None
+) -> object | None:
+    """Reproduz WAV via <audio> + data URL (funciona bem no Chrome Android)."""
+    if not _RUNS_IN_BROWSER_WASM:
+        return None
+    if append_to_dom is None:
+        append_to_dom = bool(loop)
+    url = "data:audio/wav;base64," + base64.b64encode(wav).decode("ascii")
+    el = None
+    try:
+        from js import document  # type: ignore[import-not-found]
+
+        if hasattr(document, "createElement"):
+            el = document.createElement("audio")
+            el.preload = "auto"
+            el.src = url
+    except Exception:
+        el = None
+    if el is None:
+        Ctor = _wasm_js_audio_ctor()
+        if Ctor is None:
+            return None
+        try:
+            try:
+                el = Ctor.new(url)
+            except Exception:
+                el = Ctor(url)
+        except Exception:
+            return None
+    try:
+        _wasm_html5_audio_attach(el, append_to_dom=append_to_dom)
+        el.volume = float(volume)
+        el.loop = bool(loop)
+        play_ret = el.play()
+        if play_ret is not None and hasattr(play_ret, "catch"):
+            play_ret.catch(lambda *_: None)
+        return el
+    except Exception:
+        return None
 
 
 def _wasm_web_audio_context() -> object | None:
@@ -48,17 +149,21 @@ def _wasm_web_audio_context() -> object | None:
     if _WASM_WEB_AC is not None:
         return _WASM_WEB_AC
     try:
-        j = __import__("js")
-        w = getattr(j, "globalThis", None)
-        if w is None:
-            w = j
-        Ctor = getattr(w, "AudioContext", None) or getattr(w, "webkitAudioContext", None)
-        if Ctor is None:
-            return None
-        _WASM_WEB_AC = Ctor.new()
+        from js import AudioContext  # type: ignore[import-not-found]
+
+        _WASM_WEB_AC = AudioContext.new()
         return _WASM_WEB_AC
     except Exception:
-        return None
+        pass
+    try:
+        j = __import__("js")
+        AC = getattr(j, "AudioContext", None) or getattr(j, "webkitAudioContext", None)
+        if AC is not None:
+            _WASM_WEB_AC = AC.new()
+            return _WASM_WEB_AC
+    except Exception:
+        pass
+    return None
 
 
 def _wasm_web_audio_resume(ctx: object | None) -> None:
@@ -66,15 +171,11 @@ def _wasm_web_audio_resume(ctx: object | None) -> None:
         return
     try:
         if getattr(ctx, "state", "") == "suspended" and hasattr(ctx, "resume"):
-            ctx.resume()
+            r = ctx.resume()
+            if r is not None and hasattr(r, "catch"):
+                r.catch(lambda *_: None)
     except Exception:
         pass
-
-
-def _wasm_web_audio_prime() -> None:
-    """Chamar no toque que inicia o jogo (desbloqueia AudioContext)."""
-    ctx = _wasm_web_audio_context()
-    _wasm_web_audio_resume(ctx)
 
 
 def _wasm_web_audio_tone(
@@ -104,17 +205,25 @@ def _wasm_web_audio_tone(
 
 
 def _wasm_web_audio_hit() -> None:
-    _wasm_web_audio_tone(340, 0.04, 0.11, "square", 0.0)
-    _wasm_web_audio_tone(190, 0.055, 0.08, "sine", 0.02)
+    el = _wasm_play_wav_html5(_wasm_tiny_wav(720.0, 55, 11025), volume=0.55, loop=False)
+    if el is None:
+        _wasm_web_audio_tone(340, 0.04, 0.11, "square", 0.0)
+        _wasm_web_audio_tone(190, 0.055, 0.08, "sine", 0.02)
 
 
 def _wasm_web_audio_hurt() -> None:
-    _wasm_web_audio_tone(88, 0.24, 0.13, "triangle", 0.0)
+    el = _wasm_play_wav_html5(_wasm_tiny_wav(95.0, 200, 11025), volume=0.58, loop=False)
+    if el is None:
+        _wasm_web_audio_tone(88, 0.24, 0.13, "triangle", 0.0)
 
 
 def _wasm_web_audio_bg_start() -> None:
-    global _WASM_WEB_BG
-    if not _RUNS_IN_BROWSER_WASM or _WASM_WEB_BG is not None:
+    global _WASM_WEB_BG, _WASM_HTML5_BG
+    if not _RUNS_IN_BROWSER_WASM:
+        return
+    _wasm_web_audio_bg_stop()
+    _WASM_HTML5_BG = _wasm_play_wav_html5(_wasm_soft_loop_wav(), volume=0.22, loop=True)
+    if _WASM_HTML5_BG is not None:
         return
     ctx = _wasm_web_audio_context()
     if ctx is None:
@@ -135,7 +244,14 @@ def _wasm_web_audio_bg_start() -> None:
 
 
 def _wasm_web_audio_bg_stop() -> None:
-    global _WASM_WEB_BG
+    global _WASM_WEB_BG, _WASM_HTML5_BG
+    if _WASM_HTML5_BG is not None:
+        try:
+            _WASM_HTML5_BG.pause()
+            _WASM_HTML5_BG.currentTime = 0
+        except Exception:
+            pass
+        _WASM_HTML5_BG = None
     if _WASM_WEB_BG is None:
         return
     try:
@@ -146,6 +262,15 @@ def _wasm_web_audio_bg_stop() -> None:
     except Exception:
         pass
     _WASM_WEB_BG = None
+
+
+def _wasm_web_audio_prime() -> None:
+    """Desbloqueia áudio no mesmo stack do toque (Chrome/Android bloqueiam após yield/async)."""
+    ctx = _wasm_web_audio_context()
+    _wasm_web_audio_resume(ctx)
+    _ = _wasm_play_wav_html5(
+        _wasm_tiny_wav(220.0, 25, 8000), volume=0.08, loop=False, append_to_dom=True
+    )
 
 
 def _mono16_pcm_to_wav(samples: array.array, sample_rate: int) -> bytes:
@@ -953,6 +1078,7 @@ async def main() -> None:
         shooting_enabled = True
         game_phase = "playing"
         if _RUNS_IN_BROWSER_WASM:
+            # Não adiar com create_task/sleep(0): o browser deixa de contar como gesto do utilizador.
             _wasm_web_audio_prime()
             _wasm_web_audio_bg_start()
         if snd_bg is not None and snd_bg.get_num_channels() == 0:
