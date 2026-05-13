@@ -35,8 +35,117 @@ pygame.init()
 
 _RUNS_IN_BROWSER_WASM = _compute_runs_in_browser_wasm()
 
-# Não chamar mixer.quit() no WASM: o WebAudio precisa do mixer activo para SFX/música
-# (o ecrã cinza vinha do pacote PyPI `wave`, já corrigido com WAV via struct).
+# No WASM não usamos pygame.mixer.Sound (OOB no Chrome); som = Web Audio (`_wasm_web_*`).
+
+_WASM_WEB_AC: object | None = None
+_WASM_WEB_BG: tuple[object, object] | None = None
+
+
+def _wasm_web_audio_context() -> object | None:
+    global _WASM_WEB_AC
+    if not _RUNS_IN_BROWSER_WASM:
+        return None
+    if _WASM_WEB_AC is not None:
+        return _WASM_WEB_AC
+    try:
+        j = __import__("js")
+        w = getattr(j, "globalThis", None)
+        if w is None:
+            w = j
+        Ctor = getattr(w, "AudioContext", None) or getattr(w, "webkitAudioContext", None)
+        if Ctor is None:
+            return None
+        _WASM_WEB_AC = Ctor.new()
+        return _WASM_WEB_AC
+    except Exception:
+        return None
+
+
+def _wasm_web_audio_resume(ctx: object | None) -> None:
+    if ctx is None:
+        return
+    try:
+        if getattr(ctx, "state", "") == "suspended" and hasattr(ctx, "resume"):
+            ctx.resume()
+    except Exception:
+        pass
+
+
+def _wasm_web_audio_prime() -> None:
+    """Chamar no toque que inicia o jogo (desbloqueia AudioContext)."""
+    ctx = _wasm_web_audio_context()
+    _wasm_web_audio_resume(ctx)
+
+
+def _wasm_web_audio_tone(
+    freq: float,
+    dur: float,
+    vol: float,
+    shape: str = "sine",
+    delay: float = 0.0,
+) -> None:
+    ctx = _wasm_web_audio_context()
+    if ctx is None:
+        return
+    _wasm_web_audio_resume(ctx)
+    try:
+        t0 = float(ctx.currentTime) + float(delay)
+        osc = ctx.createOscillator()
+        gn = ctx.createGain()
+        osc.type = shape
+        osc.frequency.value = float(freq)
+        gn.gain.value = float(vol)
+        osc.connect(gn)
+        gn.connect(ctx.destination)
+        osc.start(t0)
+        osc.stop(t0 + float(dur))
+    except Exception:
+        pass
+
+
+def _wasm_web_audio_hit() -> None:
+    _wasm_web_audio_tone(340, 0.04, 0.11, "square", 0.0)
+    _wasm_web_audio_tone(190, 0.055, 0.08, "sine", 0.02)
+
+
+def _wasm_web_audio_hurt() -> None:
+    _wasm_web_audio_tone(88, 0.24, 0.13, "triangle", 0.0)
+
+
+def _wasm_web_audio_bg_start() -> None:
+    global _WASM_WEB_BG
+    if not _RUNS_IN_BROWSER_WASM or _WASM_WEB_BG is not None:
+        return
+    ctx = _wasm_web_audio_context()
+    if ctx is None:
+        return
+    _wasm_web_audio_resume(ctx)
+    try:
+        osc = ctx.createOscillator()
+        gn = ctx.createGain()
+        osc.type = "sine"
+        osc.frequency.value = 72.0
+        gn.gain.value = 0.032
+        osc.connect(gn)
+        gn.connect(ctx.destination)
+        osc.start(float(ctx.currentTime))
+        _WASM_WEB_BG = (osc, gn)
+    except Exception:
+        _WASM_WEB_BG = None
+
+
+def _wasm_web_audio_bg_stop() -> None:
+    global _WASM_WEB_BG
+    if _WASM_WEB_BG is None:
+        return
+    try:
+        osc, _gn = _WASM_WEB_BG
+        ctx = _wasm_web_audio_context()
+        if ctx is not None and hasattr(osc, "stop"):
+            osc.stop(float(ctx.currentTime))
+    except Exception:
+        pass
+    _WASM_WEB_BG = None
 
 
 def _mono16_pcm_to_wav(samples: array.array, sample_rate: int) -> bytes:
@@ -121,16 +230,13 @@ def _synth_bg_loop(sr: int = 22050) -> bytes:
 
 
 def load_procedural_sounds() -> tuple[pygame.mixer.Sound | None, pygame.mixer.Sound | None, pygame.mixer.Sound | None]:
-    """Sons gerados em memória (sem ficheiros externos). Devolve (hit_inimigo, dano_jogador, musica_fundo).
-
-    No WASM **não** chamar `mixer.quit()` nem JS via `emscripten.run_script` — isso tem causado
-    falhas nativas ("memory access out of bounds") no Chrome/Android.
-    """
+    """Sons SDL (desktop). No browser (WASM) usar `_wasm_web_audio_*` — mixer+Sound corrompem o heap no Chrome."""
+    if _RUNS_IN_BROWSER_WASM:
+        return None, None, None
     sr = 22050
     try:
         if pygame.mixer.get_init() is None:
-            buf = 2048 if _RUNS_IN_BROWSER_WASM else 1024
-            pygame.mixer.init(frequency=sr, size=-16, channels=2, buffer=buf)
+            pygame.mixer.init(frequency=sr, size=-16, channels=2, buffer=1024)
         pygame.mixer.set_num_channels(16)
         hit = pygame.mixer.Sound(io.BytesIO(_synth_hit_enemy(sr)))
         hurt = pygame.mixer.Sound(io.BytesIO(_synth_hurt_player(sr)))
@@ -831,7 +937,6 @@ async def main() -> None:
         nonlocal game_phase, selected_character, player_max_hp, player, all_sprites
         nonlocal enemies, bullets, target_move_pos, spawn_timer, spawn_interval_frames, shoot_timer
         nonlocal score, player_hp, game_over, shooting_enabled
-        nonlocal snd_hit, snd_hurt, snd_bg
         selected_character = character
         player_max_hp = max(1, int(character.get("resistencia", 1)))
         player = Player(character)
@@ -847,8 +952,9 @@ async def main() -> None:
         game_over = False
         shooting_enabled = True
         game_phase = "playing"
-        if _RUNS_IN_BROWSER_WASM and snd_hit is None:
-            snd_hit, snd_hurt, snd_bg = load_procedural_sounds()
+        if _RUNS_IN_BROWSER_WASM:
+            _wasm_web_audio_prime()
+            _wasm_web_audio_bg_start()
         if snd_bg is not None and snd_bg.get_num_channels() == 0:
             try:
                 snd_bg.play(loops=-1)
@@ -980,7 +1086,9 @@ async def main() -> None:
                 if not struck:
                     continue
                 bullet.kill()
-                if snd_hit is not None:
+                if _RUNS_IN_BROWSER_WASM:
+                    _wasm_web_audio_hit()
+                elif snd_hit is not None:
                     try:
                         snd_hit.play()
                     except pygame.error:
@@ -992,7 +1100,9 @@ async def main() -> None:
 
             if pygame.sprite.spritecollide(player, enemies, False):
                 player_hp -= 1
-                if snd_hurt is not None:
+                if _RUNS_IN_BROWSER_WASM:
+                    _wasm_web_audio_hurt()
+                elif snd_hurt is not None:
                     try:
                         snd_hurt.play()
                     except pygame.error:
