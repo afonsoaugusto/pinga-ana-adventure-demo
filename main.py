@@ -35,11 +35,8 @@ pygame.init()
 
 _RUNS_IN_BROWSER_WASM = _compute_runs_in_browser_wasm()
 
-if _RUNS_IN_BROWSER_WASM:
-    try:
-        pygame.mixer.quit()
-    except pygame.error:
-        pass
+# Não chamar mixer.quit() no WASM: o WebAudio precisa do mixer activo para SFX/música
+# (o ecrã cinza vinha do pacote PyPI `wave`, já corrigido com WAV via struct).
 
 
 def _mono16_pcm_to_wav(samples: array.array, sample_rate: int) -> bytes:
@@ -125,11 +122,11 @@ def _synth_bg_loop(sr: int = 22050) -> bytes:
 
 def load_procedural_sounds() -> tuple[pygame.mixer.Sound | None, pygame.mixer.Sound | None, pygame.mixer.Sound | None]:
     """Sons gerados em memória (sem ficheiros externos). Devolve (hit_inimigo, dano_jogador, musica_fundo)."""
-    if _RUNS_IN_BROWSER_WASM:
-        return None, None, None
     try:
         if pygame.mixer.get_init() is None:
-            pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=1024)
+            # Buffer maior no browser reduz cortes no ScriptProcessor/WebAudio antigo.
+            buf = 2048 if _RUNS_IN_BROWSER_WASM else 1024
+            pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=buf)
         pygame.mixer.set_num_channels(16)
         hit = pygame.mixer.Sound(io.BytesIO(_synth_hit_enemy()))
         hurt = pygame.mixer.Sound(io.BytesIO(_synth_hurt_player()))
@@ -138,7 +135,7 @@ def load_procedural_sounds() -> tuple[pygame.mixer.Sound | None, pygame.mixer.So
         hurt.set_volume(0.62)
         bg.set_volume(0.2)
         return hit, hurt, bg
-    except (pygame.error, OSError, ValueError):
+    except (pygame.error, OSError, ValueError, TypeError):
         return None, None, None
 
 WIDTH, HEIGHT = 360, 640
