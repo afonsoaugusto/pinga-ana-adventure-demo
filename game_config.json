@@ -1,10 +1,77 @@
 {
+  "escala_sprites": 1.15,
   "player": {
     "hits_until_death": 1
   },
   "enemies": {
     "orc": {
-      "hits_to_destroy": 2
+      "sprite": "enemy.png",
+      "resistencia": 1,
+      "velocidade": 1.08,
+      "comeca_apos_pontos": 0
+    },
+    "soldado": {
+      "sprite": "Characters(100x100)/Soldier/Soldier/Soldier-Idle.png",
+      "resistencia": 3,
+      "velocidade": 0.52,
+      "comeca_apos_pontos": 10
     }
-  }
+  },
+  "spawn": {
+    "intervalo_inicial_frames": 60,
+    "intervalo_minimo_frames": 12,
+    "velocidade_progressao": 1.05
+  },
+  "characters": [
+    {
+      "id": "arthas",
+      "sprite": "player_arthas.png",
+      "name": "Arthas",
+      "title": "O Pirata",
+      "forca": 1,
+      "resistencia": 1,
+      "velocidade": 1,
+      "velocidade_tiro": 1
+    },
+    {
+      "id": "penetrus",
+      "sprite": "player_penetrus.png",
+      "name": "Penetrus",
+      "title": "Mago",
+      "forca": 2,
+      "resistencia": 1,
+      "velocidade": 0.9,
+      "velocidade_tiro": 1.6
+    },
+    {
+      "id": "uni_orc",
+      "sprite": "player_uni_orc.png",
+      "name": "Uni-Orc",
+      "title": "Orc Unicórnio",
+      "forca": 1,
+      "resistencia": 3,
+      "velocidade": 0.85,
+      "velocidade_tiro": 0.9
+    },
+    {
+      "id": "red_oni",
+      "sprite": "player_red_oni.png",
+      "name": "Red Oni",
+      "title": "Demônio japonês",
+      "forca": 1,
+      "resistencia": 1,
+      "velocidade": 1.7,
+      "velocidade_tiro": 1.2
+    },
+    {
+      "id": "sr_baldius",
+      "sprite": "player_sr_baldius.png",
+      "name": "Sr. Baldius",
+      "title": "Soldado Templário",
+      "forca": 2,
+      "resistencia": 2,
+      "velocidade": 0.7,
+      "velocidade_tiro": 0.8
+    }
+  ]
 }

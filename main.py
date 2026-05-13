@@ -39,12 +39,187 @@ def _crop_to_opaque_bounds(surf: pygame.Surface) -> pygame.Surface:
     return surf.subsurface(bb).copy()
 
 
+DEFAULT_CHARACTERS: list[dict] = [
+    {
+        "id": "arthas",
+        "sprite": "player_arthas.png",
+        "name": "Arthas",
+        "title": "O Pirata",
+        "forca": 1,
+        "resistencia": 1,
+        "velocidade": 1,
+        "velocidade_tiro": 1,
+    },
+    {
+        "id": "penetrus",
+        "sprite": "player_penetrus.png",
+        "name": "Penetrus",
+        "title": "Mago",
+        "forca": 2,
+        "resistencia": 1,
+        "velocidade": 1,
+        "velocidade_tiro": 2,
+    },
+    {
+        "id": "uni_orc",
+        "sprite": "player_uni_orc.png",
+        "name": "Uni-Orc",
+        "title": "Orc Unicórnio",
+        "forca": 1,
+        "resistencia": 2,
+        "velocidade": 1,
+        "velocidade_tiro": 1,
+    },
+    {
+        "id": "red_oni",
+        "sprite": "player_red_oni.png",
+        "name": "Red Oni",
+        "title": "Demônio japonês",
+        "forca": 2,
+        "resistencia": 1,
+        "velocidade": 2,
+        "velocidade_tiro": 1,
+    },
+    {
+        "id": "sr_baldius",
+        "sprite": "player_sr_baldius.png",
+        "name": "Sr. Baldius",
+        "title": "Soldado Templário",
+        "forca": 2,
+        "resistencia": 2,
+        "velocidade": 1,
+        "velocidade_tiro": 1,
+    },
+]
+
+
+def _normalize_character(raw: dict) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    cid = raw.get("id")
+    name = raw.get("name")
+    if not isinstance(cid, str) or not cid.strip():
+        return None
+    if not isinstance(name, str) or not name.strip():
+        return None
+    title = raw.get("title", "")
+    if not isinstance(title, str):
+        title = str(title)
+
+    def _num(key: str, default: float = 1.0) -> float:
+        v = raw.get(key, default)
+        try:
+            n = float(v)
+        except (TypeError, ValueError):
+            return default
+        return max(0.1, n)
+
+    cid_key = cid.strip()
+    sprite_raw = raw.get("sprite")
+    if isinstance(sprite_raw, str) and sprite_raw.strip():
+        sprite = sprite_raw.strip()
+    else:
+        sprite = f"player_{cid_key}.png"
+
+    return {
+        "id": cid_key,
+        "sprite": sprite,
+        "name": name.strip(),
+        "title": title.strip(),
+        "forca": _num("forca", 1.0),
+        "resistencia": int(max(1, round(_num("resistencia", 1.0)))),
+        "velocidade": _num("velocidade", 1.0),
+        "velocidade_tiro": _num("velocidade_tiro", 1.0),
+    }
+
+
+def load_characters_from_config(patch: dict) -> list[dict]:
+    raw_list = patch.get("characters")
+    if not isinstance(raw_list, list) or not raw_list:
+        return [dict(c) for c in DEFAULT_CHARACTERS]
+    out: list[dict] = []
+    for item in raw_list:
+        norm = _normalize_character(item) if isinstance(item, dict) else None
+        if norm:
+            out.append(norm)
+    return out if out else [dict(c) for c in DEFAULT_CHARACTERS]
+
+
+DEFAULT_ENEMIES_MERGE: dict[str, dict] = {
+    "orc": {
+        "sprite": "enemy.png",
+        "resistencia": 2,
+        "velocidade": 1.0,
+        "comeca_apos_pontos": 0,
+    },
+    "soldado": {
+        "sprite": "Characters(100x100)/Soldier/Soldier/Soldier-Idle.png",
+        "resistencia": 2,
+        "velocidade": 0.58,
+        "comeca_apos_pontos": 10,
+    },
+}
+
+
+def _normalize_enemy_entry(stats: dict, eid: str) -> dict:
+    resistencia = stats.get("resistencia", stats.get("hits_to_destroy", 1))
+    try:
+        resistencia_i = max(1, int(resistencia))
+    except (TypeError, ValueError):
+        resistencia_i = 1
+    sprite = stats.get("sprite", "enemy.png")
+    if not isinstance(sprite, str) or not sprite.strip():
+        sprite = "enemy.png"
+    sprite = sprite.strip()
+    try:
+        vel = float(stats.get("velocidade", 1.0))
+    except (TypeError, ValueError):
+        vel = 1.0
+    vel = max(0.12, min(4.0, vel))
+    ap = stats.get("comeca_apos_pontos", stats.get("comeca_apos_pontuacao", 0))
+    try:
+        desde = max(0, int(ap))
+    except (TypeError, ValueError):
+        desde = 0
+    return {
+        "id": str(eid),
+        "sprite": sprite,
+        "resistencia": resistencia_i,
+        "velocidade": vel,
+        "comeca_apos_pontos": desde,
+    }
+
+
+def _merge_enemies_config(base: dict[str, dict], patch: dict | None) -> dict[str, dict]:
+    merged = {k: dict(v) for k, v in base.items()}
+    if not isinstance(patch, dict):
+        return {k: _normalize_enemy_entry(v, k) for k, v in merged.items()}
+    for name, stats in patch.items():
+        if not isinstance(stats, dict):
+            continue
+        prev = merged.get(name, {})
+        combined = {**prev, **stats}
+        merged[name] = _normalize_enemy_entry(combined, str(name))
+    return merged if merged else {
+        k: _normalize_enemy_entry(v, k) for k, v in DEFAULT_ENEMIES_MERGE.items()
+    }
+
+
 def load_game_config() -> dict:
     """Lê `game_config.json` junto a `main.py` ou, na raiz do projecto, `assets/game_config.json`."""
     base = Path(__file__).resolve().parent
     defaults: dict = {
         "player": {"hits_until_death": 1},
-        "enemies": {"orc": {"hits_to_destroy": 2}},
+        "enemies": {
+            k: _normalize_enemy_entry(v, k) for k, v in DEFAULT_ENEMIES_MERGE.items()
+        },
+        "characters": [dict(c) for c in DEFAULT_CHARACTERS],
+        "spawn": {
+            "intervalo_inicial_frames": 60,
+            "intervalo_minimo_frames": 12,
+            "velocidade_progressao": 1.0,
+        },
+        "escala_sprites": 1.15,
     }
     paths: list[Path] = [base / "game_config.json"]
     if base.name != "assets" and (base / "assets").is_dir():
@@ -57,11 +232,15 @@ def load_game_config() -> dict:
                 patch = json.load(f)
             if isinstance(patch.get("player"), dict):
                 defaults["player"].update(patch["player"])
-            if isinstance(patch.get("enemies"), dict):
-                for name, stats in patch["enemies"].items():
-                    if isinstance(stats, dict):
-                        defaults["enemies"].setdefault(name, {"hits_to_destroy": 1})
-                        defaults["enemies"][name].update(stats)
+            defaults["enemies"] = _merge_enemies_config(defaults["enemies"], patch.get("enemies"))
+            if isinstance(patch.get("spawn"), dict):
+                defaults["spawn"].update(patch["spawn"])
+            if "escala_sprites" in patch:
+                try:
+                    defaults["escala_sprites"] = float(patch["escala_sprites"])
+                except (TypeError, ValueError):
+                    pass
+            defaults["characters"] = load_characters_from_config(patch)
             break
         except (OSError, json.JSONDecodeError):
             continue
@@ -82,34 +261,71 @@ def _load_scaled_png(filename: str, size: tuple[int, int]) -> pygame.Surface | N
     return None
 
 
+def _load_character_portrait(character: dict, size: tuple[int, int]) -> pygame.Surface:
+    """Sprite do personagem (menu e jogo); fallback para player.png."""
+    cid = str(character.get("id", ""))
+    sprite_name = character.get("sprite") or f"player_{cid}.png"
+    surf = _load_scaled_png(str(sprite_name), size)
+    if surf is None:
+        surf = _load_scaled_png("player.png", size)
+    if surf is None:
+        fb = pygame.Surface(size)
+        fb.fill((255, 215, 0))
+        return fb
+    return surf
+
+
 BLACK = (20, 20, 25)
 WHITE = (255, 255, 255)
 GOLD = (255, 215, 0)
 RED_OFF = (90, 45, 50)
 GREEN_ON = (40, 85, 55)
 
-# +25% face aos tamanhos base (48 / 32 / 12)
-SIZE_SCALE = 1.25
-PLAYER_SIZE = (int(round(48 * SIZE_SCALE)), int(round(48 * SIZE_SCALE)))
-ENEMY_SIZE = (int(round(32 * SIZE_SCALE)), int(round(32 * SIZE_SCALE)))
-BULLET_SIZE = (int(round(12 * SIZE_SCALE)), int(round(12 * SIZE_SCALE)))
-PLAYER_FALLBACK = (int(round(32 * SIZE_SCALE)), int(round(32 * SIZE_SCALE)))
-ENEMY_FALLBACK = (int(round(24 * SIZE_SCALE)), int(round(24 * SIZE_SCALE)))
-BULLET_FALLBACK = (int(round(8 * SIZE_SCALE)), int(round(8 * SIZE_SCALE)))
-SPAWN_PAD = int(round(20 * SIZE_SCALE))
+PLAYER_SIZE = (55, 55)
+ENEMY_SIZE = (37, 37)
+BULLET_SIZE = (14, 14)
+PLAYER_FALLBACK = (37, 37)
+ENEMY_FALLBACK = (28, 28)
+BULLET_FALLBACK = (10, 10)
+SPAWN_PAD = 23
+
+BASE_PLAYER_MOVE_SPEED = 3.0
+BASE_BULLET_SPEED = 7.0
+BASE_ENEMY_MOVE_SPEED = 1.5
+
+
+def apply_escala_sprites_from_config(cfg: dict) -> None:
+    """Define tamanhos de sprite a partir de `escala_sprites` no config (ex.: 1.15)."""
+    global PLAYER_SIZE, ENEMY_SIZE, BULLET_SIZE, PLAYER_FALLBACK, ENEMY_FALLBACK, BULLET_FALLBACK, SPAWN_PAD
+    scale = float(cfg.get("escala_sprites", 1.15))
+    scale = max(0.5, min(2.5, scale))
+    PLAYER_SIZE = (int(round(48 * scale)), int(round(48 * scale)))
+    ENEMY_SIZE = (int(round(32 * scale)), int(round(32 * scale)))
+    BULLET_SIZE = (int(round(12 * scale)), int(round(12 * scale)))
+    PLAYER_FALLBACK = (int(round(32 * scale)), int(round(32 * scale)))
+    ENEMY_FALLBACK = (int(round(24 * scale)), int(round(24 * scale)))
+    BULLET_FALLBACK = (int(round(8 * scale)), int(round(8 * scale)))
+    SPAWN_PAD = int(round(20 * scale))
+
+
+def pick_enemy_type_id(score: int, enemies_norm: dict[str, dict]) -> str:
+    """Escolhe tipo de inimigo conforme pontuação e `comeca_apos_pontos` de cada um."""
+    eligible = [eid for eid, e in enemies_norm.items() if score >= int(e.get("comeca_apos_pontos", 0))]
+    if not eligible:
+        return next(iter(enemies_norm.keys()))
+    return random.choice(eligible)
 
 
 class Player(pygame.sprite.Sprite):
-    def __init__(self) -> None:
+    def __init__(self, character: dict) -> None:
         super().__init__()
-        self.image = _load_scaled_png("player.png", PLAYER_SIZE)
-        if self.image is None:
-            self.image = pygame.Surface(PLAYER_FALLBACK)
-            self.image.fill(GOLD)
+        self.character = character
+        self.image = _load_character_portrait(character, PLAYER_SIZE)
 
         self.rect = self.image.get_rect(center=(WIDTH // 2, HEIGHT // 2))
         self.pos = pygame.Vector2(self.rect.center)
-        self.speed = 3
+        vel = float(character.get("velocidade", 1.0))
+        self.speed = BASE_PLAYER_MOVE_SPEED * vel
 
     def move(self, target_pos: tuple[float, float] | None) -> None:
         if not target_pos:
@@ -123,32 +339,48 @@ class Player(pygame.sprite.Sprite):
 
 
 class Enemy(pygame.sprite.Sprite):
-    def __init__(self, _player_pos: pygame.Vector2, *, hits_to_destroy: int = 1) -> None:
+    def __init__(
+        self,
+        _player_pos: pygame.Vector2,
+        *,
+        enemy_profile: dict,
+        cam_offset: pygame.Vector2 | None = None,
+    ) -> None:
         super().__init__()
-        self.image = _load_scaled_png("enemy.png", ENEMY_SIZE)
+        sprite_file = str(enemy_profile.get("sprite", "enemy.png"))
+        self.image = _load_scaled_png(sprite_file, ENEMY_SIZE)
+        if self.image is None:
+            self.image = _load_scaled_png("enemy.png", ENEMY_SIZE)
         if self.image is None:
             self.image = pygame.Surface(ENEMY_FALLBACK)
             self.image.fill((200, 0, 0))
 
-        self.hits_to_destroy = max(1, int(hits_to_destroy))
+        self.hits_to_destroy = max(1, int(enemy_profile.get("resistencia", 1)))
         self.hits_left = self.hits_to_destroy
+
+        # Spawnar fora do viewport actual da câmara, em coordenadas de mundo.
+        cx = cam_offset.x if cam_offset is not None else 0.0
+        cy = cam_offset.y if cam_offset is not None else 0.0
+        left, top = cx, cy
+        right, bottom = cx + WIDTH, cy + HEIGHT
 
         side = random.choice(["t", "b", "l", "r"])
         if side == "t":
-            self.pos = pygame.Vector2(random.randint(0, WIDTH), -SPAWN_PAD)
+            self.pos = pygame.Vector2(random.uniform(left, right), top - SPAWN_PAD)
         elif side == "b":
-            self.pos = pygame.Vector2(random.randint(0, WIDTH), HEIGHT + SPAWN_PAD)
+            self.pos = pygame.Vector2(random.uniform(left, right), bottom + SPAWN_PAD)
         elif side == "l":
-            self.pos = pygame.Vector2(-SPAWN_PAD, random.randint(0, HEIGHT))
+            self.pos = pygame.Vector2(left - SPAWN_PAD, random.uniform(top, bottom))
         else:
-            self.pos = pygame.Vector2(WIDTH + SPAWN_PAD, random.randint(0, HEIGHT))
+            self.pos = pygame.Vector2(right + SPAWN_PAD, random.uniform(top, bottom))
 
         self.rect = self.image.get_rect(center=(int(self.pos.x), int(self.pos.y)))
-        self.speed = 1.5
+        vel = float(enemy_profile.get("velocidade", 1.0))
+        self.speed = BASE_ENEMY_MOVE_SPEED * vel
 
-    def take_bullet_hit(self) -> bool:
+    def take_bullet_hit(self, damage: float) -> bool:
         """Devolve True se o inimigo morreu (tiros esgotados)."""
-        self.hits_left -= 1
+        self.hits_left -= max(1, int(round(damage)))
         return self.hits_left <= 0
 
     def update(self, player_pos: pygame.Vector2) -> None:
@@ -161,7 +393,14 @@ class Enemy(pygame.sprite.Sprite):
 
 
 class Bullet(pygame.sprite.Sprite):
-    def __init__(self, start_pos: pygame.Vector2, target_pos: pygame.Vector2) -> None:
+    def __init__(
+        self,
+        start_pos: pygame.Vector2,
+        target_pos: pygame.Vector2,
+        *,
+        bullet_speed_mult: float = 1.0,
+        damage: float = 1.0,
+    ) -> None:
         super().__init__()
         self.image = _load_scaled_png("note.png", BULLET_SIZE)
         if self.image is None:
@@ -174,60 +413,196 @@ class Bullet(pygame.sprite.Sprite):
         if diff.length_squared() < 1e-6:
             diff = pygame.Vector2(1, 0)
         self.dir = diff.normalize()
-        self.speed = 7
+        self.speed = BASE_BULLET_SPEED * float(bullet_speed_mult)
+        self.damage = float(damage)
+        # Sem limite de tela: a bala morre depois de percorrer uma distância máxima.
+        self.distance_left = float(max(WIDTH, HEIGHT)) * 1.2
 
     def update(self) -> None:
-        self.pos += self.dir * self.speed
+        step = self.dir * self.speed
+        self.pos += step
         self.rect.center = (int(self.pos.x), int(self.pos.y))
-        if not screen.get_rect().colliderect(self.rect):
+        self.distance_left -= self.speed
+        if self.distance_left <= 0:
             self.kill()
+
+
+WORLD_GRID_SIZE = 64
+WORLD_GRID_COLOR = (34, 38, 48)
+WORLD_GRID_ACCENT = (48, 54, 70)
+
+
+def draw_world_background(surface: pygame.Surface, cam_offset: pygame.Vector2) -> None:
+    """Desenha uma grelha que rola com a câmara, dando a noção de mundo infinito."""
+    surface.fill(BLACK)
+    gs = WORLD_GRID_SIZE
+    start_x = -int(cam_offset.x) % gs
+    start_y = -int(cam_offset.y) % gs
+    for x in range(start_x - gs, WIDTH + gs, gs):
+        col = WORLD_GRID_ACCENT if ((x + int(cam_offset.x)) // gs) % 4 == 0 else WORLD_GRID_COLOR
+        pygame.draw.line(surface, col, (x, 0), (x, HEIGHT))
+    for y in range(start_y - gs, HEIGHT + gs, gs):
+        col = WORLD_GRID_ACCENT if ((y + int(cam_offset.y)) // gs) % 4 == 0 else WORLD_GRID_COLOR
+        pygame.draw.line(surface, col, (0, y), (WIDTH, y))
+
+
+def draw_sprites_with_camera(
+    surface: pygame.Surface,
+    sprites: pygame.sprite.Group,
+    cam_offset: pygame.Vector2,
+) -> None:
+    """Desenha sprites convertendo as suas posições de mundo para coordenadas de ecrã."""
+    ox, oy = int(cam_offset.x), int(cam_offset.y)
+    for sprite in sprites:
+        surface.blit(sprite.image, (sprite.rect.x - ox, sprite.rect.y - oy))
 
 
 def _shoot_toggle_rect() -> pygame.Rect:
     return pygame.Rect(WIDTH - 136, 6, 126, 38)
 
 
+def _character_select_layout(chars: list[dict]) -> list[tuple[pygame.Rect, dict]]:
+    top = 48
+    gap = 6
+    margin_x = 10
+    w = WIDTH - 2 * margin_x
+    n = max(1, len(chars))
+    avail = HEIGHT - top - 14
+    slot_h = max(52, (avail - (n - 1) * gap) // n)
+    out: list[tuple[pygame.Rect, dict]] = []
+    y = top
+    for c in chars:
+        out.append((pygame.Rect(margin_x, y, w, slot_h), c))
+        y += slot_h + gap
+    return out
+
+
 async def main() -> None:
     cfg = load_game_config()
-    orc_hits = int(cfg["enemies"].get("orc", {}).get("hits_to_destroy", 2))
-    player_max_hp = max(1, int(cfg["player"].get("hits_until_death", 1)))
+    apply_escala_sprites_from_config(cfg)
+    enemies_cfg: dict[str, dict] = cfg["enemies"]
+    characters: list[dict] = cfg["characters"]
+    spawn_cfg = cfg["spawn"] if isinstance(cfg.get("spawn"), dict) else {}
+    spawn_initial = max(8, int(spawn_cfg.get("intervalo_inicial_frames", 60)))
+    spawn_min = int(spawn_cfg.get("intervalo_minimo_frames", 12))
+    spawn_min = max(4, min(spawn_min, spawn_initial - 1))
+    spawn_vel_prog = float(spawn_cfg.get("velocidade_progressao", 1.0))
+    spawn_vel_prog = max(0.25, min(4.0, spawn_vel_prog))
+    SPAWN_INTERVAL_SHRINK_BASE = 0.988
 
-    player = Player()
-    all_sprites = pygame.sprite.Group(player)
+    game_phase = "select"
+    selected_character: dict | None = None
+    player_max_hp = 1
+
+    player: Player | None = None
+    all_sprites = pygame.sprite.Group()
     enemies = pygame.sprite.Group()
     bullets = pygame.sprite.Group()
 
     target_move_pos: tuple[float, float] | None = None
     spawn_timer = 0
+    spawn_interval_frames = spawn_initial
     shoot_timer = 0
     score = 0
-    player_hp = player_max_hp
+    player_hp = 1
     game_over = False
     shooting_enabled = True
     font = pygame.font.SysFont(None, 32)
     font_btn = pygame.font.SysFont(None, 22)
     font_death = pygame.font.SysFont(None, 44)
+    font_sel_title = pygame.font.SysFont(None, 30)
+    font_sel_name = pygame.font.SysFont(None, 24)
+    font_sel_sub = pygame.font.SysFont(None, 20)
+    font_sel_stats = pygame.font.SysFont(None, 17)
     shoot_btn = _shoot_toggle_rect()
 
-    def reset_run() -> None:
-        nonlocal player, all_sprites, enemies, bullets, target_move_pos
-        nonlocal spawn_timer, shoot_timer, score, player_hp, game_over
-        player = Player()
+    _sel_layout_preview = _character_select_layout(characters)
+    _thumb_side = (
+        max(40, min(58, _sel_layout_preview[0][0].height - 10))
+        if _sel_layout_preview
+        else 56
+    )
+    select_portraits: dict[str, pygame.Surface] = {
+        str(ch["id"]): _load_character_portrait(ch, (_thumb_side, _thumb_side)) for ch in characters
+    }
+
+    CARD_BG = (38, 42, 52)
+    CARD_LINE = (72, 78, 92)
+    CARD_HOVER = (52, 62, 82)
+
+    def begin_play(character: dict) -> None:
+        nonlocal game_phase, selected_character, player_max_hp, player, all_sprites
+        nonlocal enemies, bullets, target_move_pos, spawn_timer, spawn_interval_frames, shoot_timer
+        nonlocal score, player_hp, game_over, shooting_enabled
+        selected_character = character
+        player_max_hp = max(1, int(character.get("resistencia", 1)))
+        player = Player(character)
         all_sprites = pygame.sprite.Group(player)
         enemies = pygame.sprite.Group()
         bullets = pygame.sprite.Group()
         target_move_pos = None
         spawn_timer = 0
+        spawn_interval_frames = spawn_initial
+        shoot_timer = 0
+        score = 0
+        player_hp = player_max_hp
+        game_over = False
+        shooting_enabled = True
+        game_phase = "playing"
+
+    def reset_run() -> None:
+        nonlocal player, all_sprites, enemies, bullets, target_move_pos
+        nonlocal spawn_timer, spawn_interval_frames, shoot_timer, score, player_hp, game_over
+        if selected_character is None:
+            return
+        player = Player(selected_character)
+        all_sprites = pygame.sprite.Group(player)
+        enemies = pygame.sprite.Group()
+        bullets = pygame.sprite.Group()
+        target_move_pos = None
+        spawn_timer = 0
+        spawn_interval_frames = spawn_initial
         shoot_timer = 0
         score = 0
         player_hp = player_max_hp
         game_over = False
 
+    def _pick_character_screen_pos(pos: tuple[float, float]) -> dict | None:
+        for rect, ch in _character_select_layout(characters):
+            if rect.collidepoint(pos):
+                return ch
+        return None
+
+    cam_offset = pygame.Vector2(0, 0)
+
+    def screen_to_world(p: tuple[float, float]) -> tuple[float, float]:
+        return (p[0] + cam_offset.x, p[1] + cam_offset.y)
+
     running = True
     while running:
+        # A câmara é recalculada a cada frame: o jogador fica sempre no centro do ecrã.
+        if player is not None:
+            cam_offset.x = player.pos.x - WIDTH / 2
+            cam_offset.y = player.pos.y - HEIGHT / 2
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+                continue
+
+            if game_phase == "select":
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    ch = _pick_character_screen_pos(event.pos)
+                    if ch is not None:
+                        begin_play(ch)
+                elif event.type == pygame.FINGERDOWN:
+                    fx, fy = event.x * WIDTH, event.y * HEIGHT
+                    ch = _pick_character_screen_pos((fx, fy))
+                    if ch is not None:
+                        begin_play(ch)
+                continue
+
+            assert player is not None
 
             if game_over:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -240,30 +615,40 @@ async def main() -> None:
                 if shoot_btn.collidepoint(event.pos):
                     shooting_enabled = not shooting_enabled
                 else:
-                    target_move_pos = event.pos
+                    target_move_pos = screen_to_world(event.pos)
 
             if event.type == pygame.MOUSEMOTION and pygame.mouse.get_pressed()[0]:
                 if not shoot_btn.collidepoint(event.pos):
-                    target_move_pos = event.pos
+                    target_move_pos = screen_to_world(event.pos)
 
             if event.type == pygame.FINGERDOWN:
                 fx, fy = event.x * WIDTH, event.y * HEIGHT
                 if shoot_btn.collidepoint(fx, fy):
                     shooting_enabled = not shooting_enabled
                 else:
-                    target_move_pos = (fx, fy)
+                    target_move_pos = screen_to_world((fx, fy))
             if event.type == pygame.FINGERMOTION:
-                target_move_pos = (event.x * WIDTH, event.y * HEIGHT)
+                target_move_pos = screen_to_world((event.x * WIDTH, event.y * HEIGHT))
 
-        if not game_over:
+        if game_phase == "playing" and not game_over and player is not None:
             player.move(target_move_pos)
+            # Re-sincroniza a câmara após o movimento deste frame para spawnar
+            # inimigos relativos ao viewport actual.
+            cam_offset.x = player.pos.x - WIDTH / 2
+            cam_offset.y = player.pos.y - HEIGHT / 2
 
             spawn_timer += 1
-            if spawn_timer > 60:
-                enemy = Enemy(player.pos, hits_to_destroy=orc_hits)
+            if spawn_timer > spawn_interval_frames:
+                eid = pick_enemy_type_id(score, enemies_cfg)
+                profile = enemies_cfg[eid]
+                enemy = Enemy(player.pos, enemy_profile=profile, cam_offset=cam_offset)
                 enemies.add(enemy)
                 all_sprites.add(enemy)
                 spawn_timer = 0
+                spawn_interval_frames = max(
+                    spawn_min,
+                    int(spawn_interval_frames * (SPAWN_INTERVAL_SHRINK_BASE**spawn_vel_prog)),
+                )
 
             shoot_timer += 1
             if shooting_enabled and shoot_timer > 40 and enemies:
@@ -271,7 +656,13 @@ async def main() -> None:
                     enemies,
                     key=lambda e: pygame.Vector2(e.pos).distance_to(player.pos),
                 )
-                bullet = Bullet(player.pos, closest.pos)
+                ch = selected_character or {}
+                bullet = Bullet(
+                    player.pos,
+                    closest.pos,
+                    bullet_speed_mult=float(ch.get("velocidade_tiro", 1.0)),
+                    damage=float(ch.get("forca", 1.0)),
+                )
                 bullets.add(bullet)
                 all_sprites.add(bullet)
                 shoot_timer = 0
@@ -285,7 +676,7 @@ async def main() -> None:
                     continue
                 bullet.kill()
                 enemy = struck[0]
-                if enemy.take_bullet_hit():
+                if enemy.take_bullet_hit(bullet.damage):
                     enemy.kill()
                     score += 1
 
@@ -298,27 +689,64 @@ async def main() -> None:
                 if player_hp <= 0:
                     game_over = True
 
-        screen.fill(BLACK)
-        all_sprites.draw(screen)
+        if game_phase == "select":
+            screen.fill(BLACK)
+            title = font_sel_title.render("Escolha o personagem", True, WHITE)
+            screen.blit(title, title.get_rect(midtop=(WIDTH // 2, 8)))
+            hint_sel = font_sel_stats.render("Toque num cartão para jogar", True, (170, 175, 190))
+            screen.blit(hint_sel, hint_sel.get_rect(midtop=(WIDTH // 2, 36)))
+            mx, my = pygame.mouse.get_pos()
+            for rect, ch in _character_select_layout(characters):
+                hover = rect.collidepoint(mx, my)
+                bg = CARD_HOVER if hover else CARD_BG
+                pygame.draw.rect(screen, bg, rect, border_radius=10)
+                pygame.draw.rect(screen, CARD_LINE, rect, 1, border_radius=10)
+                portrait = select_portraits.get(str(ch["id"]))
+                pad = 8
+                text_x = rect.x + pad
+                if portrait is not None:
+                    px = rect.x + pad
+                    py = rect.y + (rect.height - portrait.get_height()) // 2
+                    screen.blit(portrait, (px, py))
+                    text_x = px + portrait.get_width() + 8
+                name_s = font_sel_name.render(ch["name"], True, WHITE)
+                screen.blit(name_s, (text_x, rect.y + 8))
+                sub = font_sel_sub.render(ch.get("title", ""), True, (190, 195, 210))
+                screen.blit(sub, (text_x, rect.y + 30))
+                f, r, v, vt = (
+                    ch.get("forca", 1),
+                    ch.get("resistencia", 1),
+                    ch.get("velocidade", 1),
+                    ch.get("velocidade_tiro", 1),
+                )
+                stats = font_sel_stats.render(
+                    f"Força {f}  ·  Res {r}  ·  Vel {v}  ·  Tiro {vt}",
+                    True,
+                    (200, 205, 220),
+                )
+                screen.blit(stats, (text_x, rect.bottom - 26))
+        else:
+            draw_world_background(screen, cam_offset)
+            draw_sprites_with_camera(screen, all_sprites, cam_offset)
 
-        score_txt = font.render(f"Pinga Score: {score}", True, WHITE)
-        screen.blit(score_txt, (10, 10))
+            score_txt = font.render(f"Pinga Score: {score}", True, WHITE)
+            screen.blit(score_txt, (10, 10))
 
-        hp_txt = font.render(f"Vida: {player_hp}/{player_max_hp}", True, WHITE)
-        screen.blit(hp_txt, (10, 42))
+            hp_txt = font.render(f"Vida: {player_hp}/{player_max_hp}", True, WHITE)
+            screen.blit(hp_txt, (10, 42))
 
-        btn_bg = GREEN_ON if shooting_enabled else RED_OFF
-        pygame.draw.rect(screen, btn_bg, shoot_btn, border_radius=8)
-        pygame.draw.rect(screen, WHITE, shoot_btn, 2, border_radius=8)
-        btn_label = "Tiro: ON" if shooting_enabled else "Tiro: OFF"
-        btn_txt = font_btn.render(btn_label, True, WHITE)
-        screen.blit(btn_txt, btn_txt.get_rect(center=shoot_btn.center))
+            btn_bg = GREEN_ON if shooting_enabled else RED_OFF
+            pygame.draw.rect(screen, btn_bg, shoot_btn, border_radius=8)
+            pygame.draw.rect(screen, WHITE, shoot_btn, 2, border_radius=8)
+            btn_label = "Tiro: ON" if shooting_enabled else "Tiro: OFF"
+            btn_txt = font_btn.render(btn_label, True, WHITE)
+            screen.blit(btn_txt, btn_txt.get_rect(center=shoot_btn.center))
 
-        if game_over:
-            msg = font_death.render("vc morreu", True, WHITE)
-            screen.blit(msg, msg.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 36)))
-            hint = font_btn.render("Clique ou toque para recomeçar", True, (190, 190, 200))
-            screen.blit(hint, hint.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 24)))
+            if game_over:
+                msg = font_death.render("vc morreu", True, WHITE)
+                screen.blit(msg, msg.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 36)))
+                hint = font_btn.render("Clique ou toque para recomeçar", True, (190, 190, 200))
+                screen.blit(hint, hint.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 24)))
 
         pygame.display.flip()
 
