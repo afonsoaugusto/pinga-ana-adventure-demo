@@ -1419,15 +1419,14 @@ async def _post_partida_wasm_fetch(
     personagem: str | None = None,
     build: int | None = None,
 ) -> None:
-    """POST via `fetch` do browser (aparece na aba Network); evita pyfetch/thread no pygbag.
+    """POST /partidas via `pyodide.http.pyfetch` (reencaminha `method`/`body` para o Fetch API).
 
-    Em Pyodide, um único `to_js({...})` com `headers` como dict Python pode ser ignorado pelo
-    `fetch` e o pedido cai em GET (405 em /partidas). Converter `headers` com `to_js` à parte.
+    `js.fetch` + `to_js` pode responder 405 sem lançar (GET em vez de POST), pelo que o
+    fallback `pyfetch` no except nunca era executado.
     """
     import json
 
-    import js  # type: ignore[import-not-found]
-    from pyodide.ffi import to_js  # type: ignore[import-not-found]
+    from pyodide.http import pyfetch  # type: ignore[import-not-found]
 
     url = f"{base_url.rstrip('/')}/partidas"
     body_obj: dict[str, object] = {"pontuacao": pontuacao, "device": device}
@@ -1435,11 +1434,14 @@ async def _post_partida_wasm_fetch(
         body_obj["personagem"] = personagem
     if build is not None:
         body_obj["build"] = build
-    body = json.dumps(body_obj)
-    headers_js = to_js({"Content-Type": "application/json"})
-    opts = to_js({"method": "POST", "headers": headers_js, "body": body})
-    resp = await js.fetch(url, opts)
-    await resp.arrayBuffer()
+    payload = json.dumps(body_obj).encode("utf-8")
+    resp = await pyfetch(
+        url,
+        method="POST",
+        body=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    await resp.bytes()
 
 
 async def _report_partida_async(
@@ -1452,38 +1454,13 @@ async def _report_partida_async(
 ) -> None:
     try:
         if _RUNS_IN_BROWSER_WASM:
-            try:
-                await _post_partida_wasm_fetch(
-                    base_url,
-                    pontuacao,
-                    device,
-                    personagem=personagem,
-                    build=build,
-                )
-            except Exception:
-                try:
-                    from pyodide.http import pyfetch  # type: ignore[import-not-found]
-
-                    import json as _json
-
-                    u = f"{base_url.rstrip('/')}/partidas"
-                    body_obj: dict[str, object] = {"pontuacao": pontuacao, "device": device}
-                    if personagem is not None:
-                        body_obj["personagem"] = personagem
-                    if build is not None:
-                        body_obj["build"] = build
-                    b = _json.dumps(body_obj).encode("utf-8")
-                    r = await pyfetch(
-                        u,
-                        method="POST",
-                        body=b,
-                        headers={"Content-Type": "application/json"},
-                    )
-                    await r.bytes()
-                except Exception:
-                    # Não usar urllib/asyncio.to_thread no WASM: no Emscripten costuma degradar
-                    # para GET e devolve 405 em /partidas.
-                    pass
+            await _post_partida_wasm_fetch(
+                base_url,
+                pontuacao,
+                device,
+                personagem=personagem,
+                build=build,
+            )
         else:
             await asyncio.to_thread(
                 _post_partida_sync,
