@@ -37,6 +37,63 @@ _RUNS_IN_BROWSER_WASM = _compute_runs_in_browser_wasm()
 _WASM_WEB_AC: object | None = None
 _WASM_WEB_BG: tuple[object, object] | None = None
 _WASM_HTML5_BG: object | None = None
+_WASM_HTML5_SELECT_BG: object | None = None
+
+DEFAULT_SOM: dict[str, float] = {
+    "musica_selecao_pygame": 0.32,
+    "musica_selecao_wasm": 0.22,
+    "musica_jogo_pygame": 0.58,
+    "musica_jogo_ficheiro_wasm": 0.52,
+    "musica_jogo_loop_sintetico_wasm": 0.38,
+    "musica_jogo_oscilador_wasm": 0.05,
+    "loop_procedural_pygame": 0.36,
+    "sfx_acerto_pygame": 0.48,
+    "sfx_dano_pygame": 0.58,
+    "sfx_acerto_wasm": 0.55,
+    "sfx_dano_wasm": 0.58,
+    "desbloqueio_audio_wasm": 0.08,
+}
+
+_AUDIO_VOL: dict[str, float] = dict(DEFAULT_SOM)
+
+
+def _merge_som_config(base: dict[str, float], patch: object) -> dict[str, float]:
+    out = dict(base)
+    if not isinstance(patch, dict):
+        return out
+    for k, v in patch.items():
+        if k not in DEFAULT_SOM:
+            continue
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        out[k] = max(0.0, min(1.0, f))
+    return out
+
+
+def set_audio_vol_from_cfg(cfg: dict) -> None:
+    global _AUDIO_VOL
+    raw = cfg.get("som")
+    if isinstance(raw, dict):
+        _AUDIO_VOL = _merge_som_config(dict(DEFAULT_SOM), raw)
+    else:
+        _AUDIO_VOL = dict(DEFAULT_SOM)
+
+
+def _audio_vol(key: str) -> float:
+    try:
+        return max(0.0, min(1.0, float(_AUDIO_VOL.get(key, DEFAULT_SOM.get(key, 0.5)))))
+    except (TypeError, ValueError):
+        return 0.5
+
+
+def _audio_vol_osc_wasm(key: str) -> float:
+    """Ganho do oscilador de fallback (evita valores demasiado altos)."""
+    try:
+        return max(0.0, min(0.2, float(_AUDIO_VOL.get(key, DEFAULT_SOM.get(key, 0.05)))))
+    except (TypeError, ValueError):
+        return 0.05
 
 
 def _wasm_tiny_wav(freq_hz: float, duration_ms: int, sample_rate: int = 11025) -> bytes:
@@ -98,6 +155,66 @@ def _wasm_html5_audio_attach(el: object, *, append_to_dom: bool) -> None:
             b.appendChild(el)
     except Exception:
         pass
+
+
+def _wasm_play_url_html5(
+    url: str, *, volume: float = 0.45, loop: bool = True, append_to_dom: bool = True
+) -> object | None:
+    """Loop via <audio src> (ficheiros em `assets/...` servidos pelo pygbag)."""
+    if not _RUNS_IN_BROWSER_WASM or not url or not isinstance(url, str):
+        return None
+    el = None
+    try:
+        from js import document  # type: ignore[import-not-found]
+
+        if hasattr(document, "createElement"):
+            el = document.createElement("audio")
+            el.preload = "auto"
+            el.src = url
+    except Exception:
+        el = None
+    if el is None:
+        Ctor = _wasm_js_audio_ctor()
+        if Ctor is None:
+            return None
+        try:
+            try:
+                el = Ctor.new(url)
+            except Exception:
+                el = Ctor(url)
+        except Exception:
+            return None
+    try:
+        _wasm_html5_audio_attach(el, append_to_dom=append_to_dom)
+        el.volume = float(volume)
+        el.loop = bool(loop)
+        play_ret = el.play()
+        if play_ret is not None and hasattr(play_ret, "catch"):
+            play_ret.catch(lambda *_: None)
+        return el
+    except Exception:
+        return None
+
+
+def _wasm_html5_select_bg_stop() -> None:
+    global _WASM_HTML5_SELECT_BG
+    if _WASM_HTML5_SELECT_BG is not None:
+        try:
+            _WASM_HTML5_SELECT_BG.pause()
+            _WASM_HTML5_SELECT_BG.currentTime = 0
+        except Exception:
+            pass
+        _WASM_HTML5_SELECT_BG = None
+
+
+def _wasm_selection_music_start(url: str) -> None:
+    global _WASM_HTML5_SELECT_BG
+    if not _RUNS_IN_BROWSER_WASM or not url:
+        return
+    _wasm_html5_select_bg_stop()
+    _WASM_HTML5_SELECT_BG = _wasm_play_url_html5(
+        url, volume=_audio_vol("musica_selecao_wasm"), loop=True
+    )
 
 
 def _wasm_play_wav_html5(
@@ -205,24 +322,36 @@ def _wasm_web_audio_tone(
 
 
 def _wasm_web_audio_hit() -> None:
-    el = _wasm_play_wav_html5(_wasm_tiny_wav(720.0, 55, 11025), volume=0.55, loop=False)
+    el = _wasm_play_wav_html5(
+        _wasm_tiny_wav(720.0, 55, 11025), volume=_audio_vol("sfx_acerto_wasm"), loop=False
+    )
     if el is None:
         _wasm_web_audio_tone(340, 0.04, 0.11, "square", 0.0)
         _wasm_web_audio_tone(190, 0.055, 0.08, "sine", 0.02)
 
 
 def _wasm_web_audio_hurt() -> None:
-    el = _wasm_play_wav_html5(_wasm_tiny_wav(95.0, 200, 11025), volume=0.58, loop=False)
+    el = _wasm_play_wav_html5(
+        _wasm_tiny_wav(95.0, 200, 11025), volume=_audio_vol("sfx_dano_wasm"), loop=False
+    )
     if el is None:
         _wasm_web_audio_tone(88, 0.24, 0.13, "triangle", 0.0)
 
 
-def _wasm_web_audio_bg_start() -> None:
+def _wasm_web_audio_bg_start(*, file_url: str | None = None) -> None:
     global _WASM_WEB_BG, _WASM_HTML5_BG
     if not _RUNS_IN_BROWSER_WASM:
         return
     _wasm_web_audio_bg_stop()
-    _WASM_HTML5_BG = _wasm_play_wav_html5(_wasm_soft_loop_wav(), volume=0.22, loop=True)
+    if file_url:
+        _WASM_HTML5_BG = _wasm_play_url_html5(
+            file_url, volume=_audio_vol("musica_jogo_ficheiro_wasm"), loop=True
+        )
+        if _WASM_HTML5_BG is not None:
+            return
+    _WASM_HTML5_BG = _wasm_play_wav_html5(
+        _wasm_soft_loop_wav(), volume=_audio_vol("musica_jogo_loop_sintetico_wasm"), loop=True
+    )
     if _WASM_HTML5_BG is not None:
         return
     ctx = _wasm_web_audio_context()
@@ -234,7 +363,7 @@ def _wasm_web_audio_bg_start() -> None:
         gn = ctx.createGain()
         osc.type = "sine"
         osc.frequency.value = 72.0
-        gn.gain.value = 0.032
+        gn.gain.value = _audio_vol_osc_wasm("musica_jogo_oscilador_wasm")
         osc.connect(gn)
         gn.connect(ctx.destination)
         osc.start(float(ctx.currentTime))
@@ -269,7 +398,10 @@ def _wasm_web_audio_prime() -> None:
     ctx = _wasm_web_audio_context()
     _wasm_web_audio_resume(ctx)
     _ = _wasm_play_wav_html5(
-        _wasm_tiny_wav(220.0, 25, 8000), volume=0.08, loop=False, append_to_dom=True
+        _wasm_tiny_wav(220.0, 25, 8000),
+        volume=_audio_vol("desbloqueio_audio_wasm"),
+        loop=False,
+        append_to_dom=True,
     )
 
 
@@ -366,9 +498,9 @@ def load_procedural_sounds() -> tuple[pygame.mixer.Sound | None, pygame.mixer.So
         hit = pygame.mixer.Sound(io.BytesIO(_synth_hit_enemy(sr)))
         hurt = pygame.mixer.Sound(io.BytesIO(_synth_hurt_player(sr)))
         bg = pygame.mixer.Sound(io.BytesIO(_synth_bg_loop(sr)))
-        hit.set_volume(0.52)
-        hurt.set_volume(0.62)
-        bg.set_volume(0.2)
+        hit.set_volume(_audio_vol("sfx_acerto_pygame"))
+        hurt.set_volume(_audio_vol("sfx_dano_pygame"))
+        bg.set_volume(_audio_vol("loop_procedural_pygame"))
         return hit, hurt, bg
     except (pygame.error, OSError, ValueError, TypeError):
         return None, None, None
@@ -495,7 +627,7 @@ def _normalize_character(raw: dict) -> dict | None:
     else:
         sprite = f"novos/player_{cid_key}.png"
 
-    return {
+    out: dict = {
         "id": cid_key,
         "sprite": sprite,
         "name": name.strip(),
@@ -505,6 +637,10 @@ def _normalize_character(raw: dict) -> dict | None:
         "velocidade": _num("velocidade", 1.0),
         "velocidade_tiro": _num("velocidade_tiro", 1.0),
     }
+    musica_fundo = raw.get("musica_fundo")
+    if isinstance(musica_fundo, str) and musica_fundo.strip():
+        out["musica_fundo"] = musica_fundo.strip()
+    return out
 
 
 def load_characters_from_config(patch: dict) -> list[dict]:
@@ -594,6 +730,8 @@ def load_game_config() -> dict:
             "velocidade_progressao": 1.0,
         },
         "escala_sprites": 1.15,
+        "musica_selecao_personagem": None,
+        "som": dict(DEFAULT_SOM),
     }
     paths: list[Path] = [base / "game_config.json"]
     if base.name != "assets" and (base / "assets").is_dir():
@@ -614,11 +752,79 @@ def load_game_config() -> dict:
                     defaults["escala_sprites"] = float(patch["escala_sprites"])
                 except (TypeError, ValueError):
                     pass
+            if isinstance(patch, dict) and "musica_selecao_personagem" in patch:
+                ms = patch.get("musica_selecao_personagem")
+                defaults["musica_selecao_personagem"] = (
+                    ms.strip() if isinstance(ms, str) and ms.strip() else None
+                )
             defaults["characters"] = load_characters_from_config(patch)
+            defaults["som"] = _merge_som_config(dict(DEFAULT_SOM), patch.get("som"))
             break
         except (OSError, json.JSONDecodeError):
             continue
     return defaults
+
+
+def _resolve_audio_file(rel: str | None) -> Path | None:
+    if not isinstance(rel, str) or not rel.strip():
+        return None
+    base = Path(__file__).resolve().parent
+    name = rel.strip()
+    p = Path(name)
+    candidates: list[Path] = [base / name, base / "assets" / name]
+    if p.name:
+        candidates.append(base / "assets" / p.name)
+    seen: set[str] = set()
+    for cand in candidates:
+        key = str(cand.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _browser_audio_url(path: Path) -> str:
+    base = Path(__file__).resolve().parent
+    try:
+        rel = path.resolve().relative_to((base / "assets").resolve())
+        return "assets/" + rel.as_posix()
+    except ValueError:
+        try:
+            rel = path.resolve().relative_to(base.resolve())
+            return rel.as_posix()
+        except ValueError:
+            return path.name
+
+
+def _pygame_bgm_stop() -> None:
+    if _RUNS_IN_BROWSER_WASM:
+        return
+    try:
+        pygame.mixer.music.stop()
+    except (pygame.error, AttributeError):
+        pass
+
+
+def _pygame_bgm_play_file(path: Path, *, music_volume: float) -> bool:
+    if _RUNS_IN_BROWSER_WASM:
+        return False
+    v = max(0.0, min(1.0, float(music_volume)))
+    try_paths: list[Path] = [path]
+    if path.suffix.lower() == ".aac":
+        alt = path.with_suffix(".mp3")
+        if alt.is_file() and alt not in try_paths:
+            try_paths.append(alt)
+    for p in try_paths:
+        try:
+            pygame.mixer.music.load(str(p))
+            pygame.mixer.music.set_volume(v)
+            pygame.mixer.music.play(loops=-1)
+            return True
+        except (pygame.error, OSError, NotImplementedError):
+            continue
+    return False
 
 
 def _load_scaled_png(filename: str, size: tuple[int, int]) -> pygame.Surface | None:
@@ -1006,6 +1212,8 @@ def _character_select_layout(chars: list[dict]) -> list[tuple[pygame.Rect, dict]
 
 async def main() -> None:
     # No browser: não inicializar o mixer antes de um toque — Android/Chrome deixa o AudioContext suspenso.
+    cfg = load_game_config()
+    set_audio_vol_from_cfg(cfg)
     snd_hit: pygame.mixer.Sound | None
     snd_hurt: pygame.mixer.Sound | None
     snd_bg: pygame.mixer.Sound | None
@@ -1013,11 +1221,16 @@ async def main() -> None:
         snd_hit = snd_hurt = snd_bg = None
     else:
         snd_hit, snd_hurt, snd_bg = load_procedural_sounds()
-    cfg = load_game_config()
     apply_escala_sprites_from_config(cfg)
     enemies_cfg: dict[str, dict] = cfg["enemies"]
     characters: list[dict] = cfg["characters"]
     spawn_cfg = cfg["spawn"] if isinstance(cfg.get("spawn"), dict) else {}
+    sel_music_rel = cfg.get("musica_selecao_personagem")
+    sel_music_path = (
+        _resolve_audio_file(str(sel_music_rel))
+        if isinstance(sel_music_rel, str) and sel_music_rel.strip()
+        else None
+    )
     spawn_initial = max(8, int(spawn_cfg.get("intervalo_inicial_frames", 60)))
     spawn_min = int(spawn_cfg.get("intervalo_minimo_frames", 12))
     spawn_min = max(4, min(spawn_min, spawn_initial - 1))
@@ -1061,6 +1274,11 @@ async def main() -> None:
         str(ch["id"]): _load_character_portrait(ch, (_thumb_side, _thumb_side)) for ch in characters
     }
 
+    if not _RUNS_IN_BROWSER_WASM and sel_music_path is not None:
+        _pygame_bgm_play_file(sel_music_path, music_volume=_audio_vol("musica_selecao_pygame"))
+    elif _RUNS_IN_BROWSER_WASM and sel_music_path is not None:
+        _wasm_selection_music_start(_browser_audio_url(sel_music_path))
+
     # Texturas de fundo (só desktop); no browser a grelha é gerada em draw_world_background.
     await asyncio.sleep(0)
     if not _RUNS_IN_BROWSER_WASM:
@@ -1089,15 +1307,24 @@ async def main() -> None:
         game_over = False
         shooting_enabled = True
         game_phase = "playing"
+        _wasm_html5_select_bg_stop()
+        bg_path = _resolve_audio_file(character.get("musica_fundo"))
+        bg_url = _browser_audio_url(bg_path) if bg_path else ""
         if _RUNS_IN_BROWSER_WASM:
             # Não adiar com create_task/sleep(0): o browser deixa de contar como gesto do utilizador.
             _wasm_web_audio_prime()
-            _wasm_web_audio_bg_start()
-        if snd_bg is not None and snd_bg.get_num_channels() == 0:
-            try:
-                snd_bg.play(loops=-1)
-            except pygame.error:
+            _wasm_web_audio_bg_start(file_url=bg_url if bg_url else None)
+        if not _RUNS_IN_BROWSER_WASM:
+            _pygame_bgm_stop()
+            if bg_path is not None and _pygame_bgm_play_file(
+                bg_path, music_volume=_audio_vol("musica_jogo_pygame")
+            ):
                 pass
+            elif snd_bg is not None and snd_bg.get_num_channels() == 0:
+                try:
+                    snd_bg.play(loops=-1)
+                except pygame.error:
+                    pass
 
     def reset_run() -> None:
         nonlocal player, all_sprites, enemies, bullets, target_move_pos

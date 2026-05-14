@@ -1,5 +1,20 @@
 {
   "escala_sprites": 1.15,
+  "musica_selecao_personagem": "sounds/vem-com-pinga-ana.aac",
+  "som": {
+    "musica_selecao_pygame": 0.32,
+    "musica_selecao_wasm": 0.22,
+    "musica_jogo_pygame": 0.58,
+    "musica_jogo_ficheiro_wasm": 0.52,
+    "musica_jogo_loop_sintetico_wasm": 0.38,
+    "musica_jogo_oscilador_wasm": 0.05,
+    "loop_procedural_pygame": 0.36,
+    "sfx_acerto_pygame": 0.48,
+    "sfx_dano_pygame": 0.58,
+    "sfx_acerto_wasm": 0.55,
+    "sfx_dano_wasm": 0.58,
+    "desbloqueio_audio_wasm": 0.08
+  },
   "player": {
     "hits_until_death": 1
   },
@@ -11,7 +26,7 @@
       "comeca_apos_pontos": 0
     },
     "soldado": {
-      "sprite": "Characters(100x100)/Soldier/Soldier/Soldier-Idle.png",
+      "sprite": "soldier.png",
       "resistencia": 3,
       "velocidade": 0.52,
       "comeca_apos_pontos": 20
@@ -28,6 +43,7 @@
       "sprite": "novos/player_arthas.png",
       "name": "Arthas",
       "title": "O Pirata",
+      "musica_fundo": "sounds/Pirates-of-the-Caribbean.mid",
       "forca": 1,
       "resistencia": 1,
       "velocidade": 1,
@@ -38,6 +54,7 @@
       "sprite": "novos/player_penetrus.png",
       "name": "Penetrus",
       "title": "Mago",
+      "musica_fundo": "sounds/Beethoven-Moonlight-Sonata.mid",
       "forca": 2,
       "resistencia": 1,
       "velocidade": 0.9,
@@ -48,6 +65,7 @@
       "sprite": "novos/player_uni_orc.png",
       "name": "Uni-Orc",
       "title": "Orc Unicórnio",
+      "musica_fundo": "sounds/toto-africa.mid",
       "forca": 1,
       "resistencia": 3,
       "velocidade": 0.85,
@@ -58,6 +76,7 @@
       "sprite": "novos/player_red_oni.png",
       "name": "Red Oni",
       "title": "Demônio japonês",
+      "musica_fundo": "sounds/Tokyo-Ghoul-Unravel.mid",
       "forca": 1,
       "resistencia": 1,
       "velocidade": 1.7,
@@ -68,6 +87,7 @@
       "sprite": "novos/player_sr_baldius.png",
       "name": "Sr. Baldius",
       "title": "Soldado Templário",
+      "musica_fundo": "sounds/14-Back-to-the-Industry.mp3",
       "forca": 2,
       "resistencia": 2,
       "velocidade": 0.7,
