@@ -87,7 +87,7 @@
       "sprite": "novos/player_sr_baldius.png",
       "name": "Sr. Baldius",
       "title": "Soldado Templário",
-      "musica_fundo": "sounds/14-Back-to-the-Industry.mp3",
+      "musica_fundo": "sounds/14-Back-to-the-Industry.ogg",
       "forca": 2,
       "resistencia": 2,
       "velocidade": 0.7,

@@ -813,9 +813,10 @@ def _pygame_bgm_play_file(path: Path, *, music_volume: float) -> bool:
     v = max(0.0, min(1.0, float(music_volume)))
     try_paths: list[Path] = [path]
     if path.suffix.lower() == ".aac":
-        alt = path.with_suffix(".mp3")
-        if alt.is_file() and alt not in try_paths:
-            try_paths.append(alt)
+        for ext in (".ogg",):
+            alt = path.with_suffix(ext)
+            if alt.is_file() and alt not in try_paths:
+                try_paths.append(alt)
     for p in try_paths:
         try:
             pygame.mixer.music.load(str(p))
