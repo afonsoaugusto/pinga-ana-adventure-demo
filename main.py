@@ -160,7 +160,7 @@ def _wasm_html5_audio_attach(el: object, *, append_to_dom: bool) -> None:
 def _wasm_play_url_html5(
     url: str, *, volume: float = 0.45, loop: bool = True, append_to_dom: bool = True
 ) -> object | None:
-    """Loop via <audio src> (ficheiros em `assets/...` servidos pelo pygbag)."""
+    """`<audio src=…>` com URL HTTP, `data:` (base64) ou `blob:` (quando suportado)."""
     if not _RUNS_IN_BROWSER_WASM or not url or not isinstance(url, str):
         return None
     el = None
@@ -196,6 +196,42 @@ def _wasm_play_url_html5(
         return None
 
 
+def _wasm_audio_mime_for_path(path: Path) -> str:
+    ext = path.suffix.lower()
+    return {
+        ".ogg": "audio/ogg",
+        ".opus": "audio/ogg",
+        ".oga": "audio/ogg",
+        ".aac": "audio/aac",
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".mid": "audio/midi",
+        ".midi": "audio/midi",
+    }.get(ext, "application/octet-stream")
+
+
+def _wasm_audio_data_url(path: Path) -> str | None:
+    """Lê áudio do FS embebido (pós-extract do .tar.gz) e expõe como data URL.
+
+    No GitHub Pages o pacote pygbag não publica `assets/sounds/` como ficheiros HTTP;
+    `assets/...` no `<audio>` falha com 404. O Python vê os ficheiros em disco após extract.
+    """
+    if not _RUNS_IN_BROWSER_WASM:
+        return None
+    max_raw = 6 * 1024 * 1024
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    if not raw or len(raw) > max_raw:
+        return None
+    mime = _wasm_audio_mime_for_path(path)
+    try:
+        return f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
+    except Exception:
+        return None
+
+
 def _wasm_html5_select_bg_stop() -> None:
     global _WASM_HTML5_SELECT_BG
     if _WASM_HTML5_SELECT_BG is not None:
@@ -207,14 +243,26 @@ def _wasm_html5_select_bg_stop() -> None:
         _WASM_HTML5_SELECT_BG = None
 
 
-def _wasm_selection_music_start(url: str) -> None:
+def _wasm_selection_music_start(path: Path | None) -> None:
     global _WASM_HTML5_SELECT_BG
-    if not _RUNS_IN_BROWSER_WASM or not url:
+    if not _RUNS_IN_BROWSER_WASM or path is None:
         return
     _wasm_html5_select_bg_stop()
-    _WASM_HTML5_SELECT_BG = _wasm_play_url_html5(
-        url, volume=_audio_vol("musica_selecao_wasm"), loop=True
-    )
+    vol = _audio_vol("musica_selecao_wasm")
+    candidates: list[Path] = [path]
+    if path.suffix.lower() == ".aac":
+        alt = path.with_suffix(".ogg")
+        if alt.is_file() and alt.resolve() != path.resolve():
+            candidates.append(alt)
+    for cand in candidates:
+        if not cand.is_file():
+            continue
+        url = _wasm_audio_data_url(cand)
+        if not url:
+            continue
+        _WASM_HTML5_SELECT_BG = _wasm_play_url_html5(url, volume=vol, loop=True)
+        if _WASM_HTML5_SELECT_BG is not None:
+            return
 
 
 def _wasm_play_wav_html5(
@@ -338,17 +386,19 @@ def _wasm_web_audio_hurt() -> None:
         _wasm_web_audio_tone(88, 0.24, 0.13, "triangle", 0.0)
 
 
-def _wasm_web_audio_bg_start(*, file_url: str | None = None) -> None:
+def _wasm_web_audio_bg_start(*, pack_path: Path | None = None) -> None:
     global _WASM_WEB_BG, _WASM_HTML5_BG
     if not _RUNS_IN_BROWSER_WASM:
         return
     _wasm_web_audio_bg_stop()
-    if file_url:
-        _WASM_HTML5_BG = _wasm_play_url_html5(
-            file_url, volume=_audio_vol("musica_jogo_ficheiro_wasm"), loop=True
-        )
-        if _WASM_HTML5_BG is not None:
-            return
+    if pack_path is not None and pack_path.is_file():
+        url = _wasm_audio_data_url(pack_path)
+        if url:
+            _WASM_HTML5_BG = _wasm_play_url_html5(
+                url, volume=_audio_vol("musica_jogo_ficheiro_wasm"), loop=True
+            )
+            if _WASM_HTML5_BG is not None:
+                return
     _WASM_HTML5_BG = _wasm_play_wav_html5(
         _wasm_soft_loop_wav(), volume=_audio_vol("musica_jogo_loop_sintetico_wasm"), loop=True
     )
@@ -783,19 +833,6 @@ def _resolve_audio_file(rel: str | None) -> Path | None:
         if cand.is_file():
             return cand
     return None
-
-
-def _browser_audio_url(path: Path) -> str:
-    base = Path(__file__).resolve().parent
-    try:
-        rel = path.resolve().relative_to((base / "assets").resolve())
-        return "assets/" + rel.as_posix()
-    except ValueError:
-        try:
-            rel = path.resolve().relative_to(base.resolve())
-            return rel.as_posix()
-        except ValueError:
-            return path.name
 
 
 def _pygame_bgm_stop() -> None:
@@ -1278,7 +1315,7 @@ async def main() -> None:
     if not _RUNS_IN_BROWSER_WASM and sel_music_path is not None:
         _pygame_bgm_play_file(sel_music_path, music_volume=_audio_vol("musica_selecao_pygame"))
     elif _RUNS_IN_BROWSER_WASM and sel_music_path is not None:
-        _wasm_selection_music_start(_browser_audio_url(sel_music_path))
+        _wasm_selection_music_start(sel_music_path)
 
     # Texturas de fundo (só desktop); no browser a grelha é gerada em draw_world_background.
     await asyncio.sleep(0)
@@ -1310,11 +1347,10 @@ async def main() -> None:
         game_phase = "playing"
         _wasm_html5_select_bg_stop()
         bg_path = _resolve_audio_file(character.get("musica_fundo"))
-        bg_url = _browser_audio_url(bg_path) if bg_path else ""
         if _RUNS_IN_BROWSER_WASM:
             # Não adiar com create_task/sleep(0): o browser deixa de contar como gesto do utilizador.
             _wasm_web_audio_prime()
-            _wasm_web_audio_bg_start(file_url=bg_url if bg_url else None)
+            _wasm_web_audio_bg_start(pack_path=bg_path)
         if not _RUNS_IN_BROWSER_WASM:
             _pygame_bgm_stop()
             if bg_path is not None and _pygame_bgm_play_file(
