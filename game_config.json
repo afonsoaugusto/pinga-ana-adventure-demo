@@ -1,4 +1,5 @@
 {
+  "analytics_api_url": "https://pinga-ana-adventure-demo-api.vercel.app",
   "escala_sprites": 1.15,
   "musica_selecao_personagem": "sounds/vem-com-pinga-ana.aac",
   "som": {

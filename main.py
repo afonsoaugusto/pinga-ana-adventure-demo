@@ -1272,6 +1272,57 @@ def _character_select_layout(chars: list[dict]) -> list[tuple[pygame.Rect, dict]
     return out
 
 
+def _analytics_device_label() -> str:
+    if not _RUNS_IN_BROWSER_WASM:
+        return "local"
+    try:
+        import js  # type: ignore[import-not-found]
+
+        ua = str(js.navigator.userAgent).lower()
+        mobile_markers = ("mobile", "android", "iphone", "ipad", "ipod", "webos")
+        if any(m in ua for m in mobile_markers):
+            return "navegador_celular"
+        return "navegador_pc"
+    except (ImportError, AttributeError, TypeError, ValueError):
+        return "navegador_wasm"
+
+
+def _analytics_api_base(cfg: dict) -> str | None:
+    raw = cfg.get("analytics_api_url")
+    if isinstance(raw, str):
+        s = raw.strip()
+        if s:
+            return s.rstrip("/")
+    return None
+
+
+def _post_partida_sync(base_url: str, pontuacao: int, device: str) -> None:
+    import json
+    import urllib.error
+    import urllib.request
+
+    url = f"{base_url.rstrip('/')}/partidas"
+    body = json.dumps({"pontuacao": pontuacao, "device": device}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            resp.read(256)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError):
+        pass
+
+
+async def _report_partida_async(base_url: str, pontuacao: int, device: str) -> None:
+    try:
+        await asyncio.to_thread(_post_partida_sync, base_url, pontuacao, device)
+    except Exception:
+        pass
+
+
 async def main() -> None:
     # No browser: não inicializar o mixer antes de um toque — Android/Chrome deixa o AudioContext suspenso.
     cfg = load_game_config()
@@ -1539,6 +1590,11 @@ async def main() -> None:
                     b.kill()
                 if player_hp <= 0:
                     game_over = True
+                    base = _analytics_api_base(cfg)
+                    if base is not None:
+                        asyncio.create_task(
+                            _report_partida_async(base, score, _analytics_device_label())
+                        )
 
         if game_phase == "select":
             screen.fill(BLACK)
