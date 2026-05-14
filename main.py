@@ -8,6 +8,7 @@ import random
 import struct
 import sys
 from pathlib import Path
+from urllib.parse import urljoin
 
 import pygame
 
@@ -1318,30 +1319,75 @@ def _post_partida_sync(base_url: str, pontuacao: int, device: str) -> None:
         pass
 
 
-async def _post_partida_wasm_pyfetch(base_url: str, pontuacao: int, device: str) -> None:
-    """No browser (Pyodide), urllib em thread costuma não fazer o pedido; usa fetch via pyfetch."""
+async def _wasm_try_refresh_analytics_url(cfg: dict) -> dict:
+    """Se não houver URL no FS embebido, lê `game_config.json` relativo à página (GitHub Pages / subpastas)."""
+    if _analytics_api_base(cfg):
+        return cfg
+    try:
+        import js  # type: ignore[import-not-found]
+        from pyodide.ffi import to_js  # type: ignore[import-not-found]
+
+        href = str(js.location.href).split("#")[0].split("?")[0]
+        if href.endswith("index.html"):
+            href = href[: -len("index.html")]
+        if not href.endswith("/"):
+            href = href + "/"
+        cfg_url = urljoin(href, "game_config.json")
+        r = await js.fetch(cfg_url, to_js({"cache": "no-store"}))
+        if not r.ok:
+            return cfg
+        raw = await r.text()
+        patch = json.loads(raw)
+        au = patch.get("analytics_api_url")
+        if isinstance(au, str) and au.strip():
+            cfg["analytics_api_url"] = au.strip()
+    except Exception:
+        pass
+    return cfg
+
+
+async def _post_partida_wasm_fetch(base_url: str, pontuacao: int, device: str) -> None:
+    """POST via `fetch` do browser (aparece na aba Network); evita pyfetch/thread no pygbag."""
     import json
 
-    from pyodide.http import pyfetch  # type: ignore[import-not-found]
+    import js  # type: ignore[import-not-found]
+    from pyodide.ffi import to_js  # type: ignore[import-not-found]
 
     url = f"{base_url.rstrip('/')}/partidas"
     body = json.dumps({"pontuacao": pontuacao, "device": device})
-    r = await pyfetch(
-        url,
-        method="POST",
-        body=body,
-        headers={"Content-Type": "application/json"},
+    opts = to_js(
+        {
+            "method": "POST",
+            "headers": {"Content-Type": "application/json"},
+            "body": body,
+        }
     )
-    await r.bytes()
+    resp = await js.fetch(url, opts)
+    await resp.arrayBuffer()
 
 
 async def _report_partida_async(base_url: str, pontuacao: int, device: str) -> None:
     try:
         if _RUNS_IN_BROWSER_WASM:
             try:
-                await _post_partida_wasm_pyfetch(base_url, pontuacao, device)
-            except ImportError:
-                await asyncio.to_thread(_post_partida_sync, base_url, pontuacao, device)
+                await _post_partida_wasm_fetch(base_url, pontuacao, device)
+            except Exception:
+                try:
+                    from pyodide.http import pyfetch  # type: ignore[import-not-found]
+
+                    import json as _json
+
+                    u = f"{base_url.rstrip('/')}/partidas"
+                    b = _json.dumps({"pontuacao": pontuacao, "device": device})
+                    r = await pyfetch(
+                        u,
+                        method="POST",
+                        body=b,
+                        headers={"Content-Type": "application/json"},
+                    )
+                    await r.bytes()
+                except Exception:
+                    await asyncio.to_thread(_post_partida_sync, base_url, pontuacao, device)
         else:
             await asyncio.to_thread(_post_partida_sync, base_url, pontuacao, device)
     except Exception:
@@ -1351,6 +1397,8 @@ async def _report_partida_async(base_url: str, pontuacao: int, device: str) -> N
 async def main() -> None:
     # No browser: não inicializar o mixer antes de um toque — Android/Chrome deixa o AudioContext suspenso.
     cfg = load_game_config()
+    if _RUNS_IN_BROWSER_WASM:
+        cfg = await _wasm_try_refresh_analytics_url(cfg)
     set_audio_vol_from_cfg(cfg)
     snd_hit: pygame.mixer.Sound | None
     snd_hurt: pygame.mixer.Sound | None
@@ -1617,9 +1665,7 @@ async def main() -> None:
                     game_over = True
                     base = _analytics_api_base(cfg)
                     if base is not None:
-                        asyncio.create_task(
-                            _report_partida_async(base, score, _analytics_device_label())
-                        )
+                        await _report_partida_async(base, score, _analytics_device_label())
 
         if game_phase == "select":
             screen.fill(BLACK)
