@@ -232,15 +232,42 @@ def _wasm_audio_data_url(path: Path) -> str | None:
         return None
 
 
-def _wasm_html5_select_bg_stop() -> None:
-    global _WASM_HTML5_SELECT_BG
-    if _WASM_HTML5_SELECT_BG is not None:
+def _wasm_html5_audio_hard_stop(el: object | None) -> None:
+    """Para de vez um <audio> (loop + data URL podem continuar só com pause)."""
+    if el is None:
+        return
+    try:
+        el.loop = False
+        el.pause()
+        el.currentTime = 0
+    except Exception:
+        pass
+    try:
+        el.src = ""
+    except Exception:
         try:
-            _WASM_HTML5_SELECT_BG.pause()
-            _WASM_HTML5_SELECT_BG.currentTime = 0
+            el.removeAttribute("src")
         except Exception:
             pass
-        _WASM_HTML5_SELECT_BG = None
+    try:
+        el.load()
+    except Exception:
+        pass
+    try:
+        from js import document  # type: ignore[import-not-found]
+
+        b = document.body
+        if b is not None and getattr(el, "parentNode", None) is b:
+            b.removeChild(el)
+    except Exception:
+        pass
+
+
+def _wasm_html5_select_bg_stop() -> None:
+    global _WASM_HTML5_SELECT_BG
+    el = _WASM_HTML5_SELECT_BG
+    _WASM_HTML5_SELECT_BG = None
+    _wasm_html5_audio_hard_stop(el)
 
 
 def _wasm_selection_music_start(path: Path | None) -> None:
@@ -390,6 +417,7 @@ def _wasm_web_audio_bg_start(*, pack_path: Path | None = None) -> None:
     global _WASM_WEB_BG, _WASM_HTML5_BG
     if not _RUNS_IN_BROWSER_WASM:
         return
+    _wasm_html5_select_bg_stop()
     _wasm_web_audio_bg_stop()
     if pack_path is not None and pack_path.is_file():
         url = _wasm_audio_data_url(pack_path)
@@ -424,13 +452,9 @@ def _wasm_web_audio_bg_start(*, pack_path: Path | None = None) -> None:
 
 def _wasm_web_audio_bg_stop() -> None:
     global _WASM_WEB_BG, _WASM_HTML5_BG
-    if _WASM_HTML5_BG is not None:
-        try:
-            _WASM_HTML5_BG.pause()
-            _WASM_HTML5_BG.currentTime = 0
-        except Exception:
-            pass
-        _WASM_HTML5_BG = None
+    el = _WASM_HTML5_BG
+    _WASM_HTML5_BG = None
+    _wasm_html5_audio_hard_stop(el)
     if _WASM_WEB_BG is None:
         return
     try:
@@ -1344,8 +1368,8 @@ async def main() -> None:
         player_hp = player_max_hp
         game_over = False
         shooting_enabled = True
-        game_phase = "playing"
         _wasm_html5_select_bg_stop()
+        game_phase = "playing"
         bg_path = _resolve_audio_file(character.get("musica_fundo"))
         if _RUNS_IN_BROWSER_WASM:
             # Não adiar com create_task/sleep(0): o browser deixa de contar como gesto do utilizador.
