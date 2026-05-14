@@ -790,6 +790,31 @@ def _merge_enemies_config(base: dict[str, dict], patch: dict | None) -> dict[str
     }
 
 
+def _load_build_params_dict() -> dict[str, object]:
+    """Metadados de build (`build_params.json`); o CI escreve o ficheiro antes do pygbag."""
+    base = Path(__file__).resolve().parent
+    out: dict[str, object] = {"build_number": 0, "run_id": "", "sha": ""}
+    for path in (base / "build_params.json", base / "assets" / "build_params.json"):
+        if not path.is_file():
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                try:
+                    out["build_number"] = int(raw.get("build_number", 0))
+                except (TypeError, ValueError):
+                    out["build_number"] = 0
+                rid = raw.get("run_id")
+                out["run_id"] = rid.strip() if isinstance(rid, str) else ""
+                sh = raw.get("sha")
+                out["sha"] = sh.strip() if isinstance(sh, str) else ""
+            break
+        except (OSError, json.JSONDecodeError):
+            continue
+    return out
+
+
 def load_game_config() -> dict:
     """Lê `game_config.json` junto a `main.py` ou, na raiz do projecto, `assets/game_config.json`."""
     base = Path(__file__).resolve().parent
@@ -839,6 +864,7 @@ def load_game_config() -> dict:
             break
         except (OSError, json.JSONDecodeError):
             continue
+    defaults["build"] = _load_build_params_dict()
     return defaults
 
 
@@ -1256,7 +1282,17 @@ def draw_sprites_with_camera(
 
 
 def _shoot_toggle_rect() -> pygame.Rect:
-    return pygame.Rect(WIDTH - 136, 6, 126, 38)
+    """Quadrado compacto no canto superior direito; o texto «Tiro» fica imediatamente à esquerda."""
+    margin = 8
+    side = 28
+    return pygame.Rect(WIDTH - margin - side, 7, side, side)
+
+
+def _music_toggle_rect() -> pygame.Rect:
+    """Canto superior direito, por baixo do tiro, para não cobrir pontuação/vida à esquerda."""
+    margin = 8
+    w, h = 114, 30
+    return pygame.Rect(WIDTH - w - margin, 40, w, h)
 
 
 def _character_select_layout(chars: list[dict]) -> list[tuple[pygame.Rect, dict]]:
@@ -1299,13 +1335,42 @@ def _analytics_api_base(cfg: dict) -> str | None:
     return None
 
 
-def _post_partida_sync(base_url: str, pontuacao: int, device: str) -> None:
+def _analytics_partida_extras(cfg: dict, character: dict | None) -> tuple[str | None, int | None]:
+    """personagem (id) e número de build para POST /partidas."""
+    pid: str | None = None
+    if isinstance(character, dict):
+        raw = character.get("id")
+        if isinstance(raw, str) and raw.strip():
+            pid = raw.strip()
+    bn: int | None = None
+    binfo = cfg.get("build")
+    if isinstance(binfo, dict):
+        try:
+            bn = int(binfo.get("build_number", 0))
+        except (TypeError, ValueError):
+            bn = None
+    return pid, bn
+
+
+def _post_partida_sync(
+    base_url: str,
+    pontuacao: int,
+    device: str,
+    *,
+    personagem: str | None = None,
+    build: int | None = None,
+) -> None:
     import json
     import urllib.error
     import urllib.request
 
     url = f"{base_url.rstrip('/')}/partidas"
-    body = json.dumps({"pontuacao": pontuacao, "device": device}).encode("utf-8")
+    body_obj: dict[str, object] = {"pontuacao": pontuacao, "device": device}
+    if personagem is not None:
+        body_obj["personagem"] = personagem
+    if build is not None:
+        body_obj["build"] = build
+    body = json.dumps(body_obj).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=body,
@@ -1346,7 +1411,14 @@ async def _wasm_try_refresh_analytics_url(cfg: dict) -> dict:
     return cfg
 
 
-async def _post_partida_wasm_fetch(base_url: str, pontuacao: int, device: str) -> None:
+async def _post_partida_wasm_fetch(
+    base_url: str,
+    pontuacao: int,
+    device: str,
+    *,
+    personagem: str | None = None,
+    build: int | None = None,
+) -> None:
     """POST via `fetch` do browser (aparece na aba Network); evita pyfetch/thread no pygbag."""
     import json
 
@@ -1354,7 +1426,12 @@ async def _post_partida_wasm_fetch(base_url: str, pontuacao: int, device: str) -
     from pyodide.ffi import to_js  # type: ignore[import-not-found]
 
     url = f"{base_url.rstrip('/')}/partidas"
-    body = json.dumps({"pontuacao": pontuacao, "device": device})
+    body_obj: dict[str, object] = {"pontuacao": pontuacao, "device": device}
+    if personagem is not None:
+        body_obj["personagem"] = personagem
+    if build is not None:
+        body_obj["build"] = build
+    body = json.dumps(body_obj)
     opts = to_js(
         {
             "method": "POST",
@@ -1366,11 +1443,24 @@ async def _post_partida_wasm_fetch(base_url: str, pontuacao: int, device: str) -
     await resp.arrayBuffer()
 
 
-async def _report_partida_async(base_url: str, pontuacao: int, device: str) -> None:
+async def _report_partida_async(
+    base_url: str,
+    pontuacao: int,
+    device: str,
+    *,
+    personagem: str | None = None,
+    build: int | None = None,
+) -> None:
     try:
         if _RUNS_IN_BROWSER_WASM:
             try:
-                await _post_partida_wasm_fetch(base_url, pontuacao, device)
+                await _post_partida_wasm_fetch(
+                    base_url,
+                    pontuacao,
+                    device,
+                    personagem=personagem,
+                    build=build,
+                )
             except Exception:
                 try:
                     from pyodide.http import pyfetch  # type: ignore[import-not-found]
@@ -1378,7 +1468,12 @@ async def _report_partida_async(base_url: str, pontuacao: int, device: str) -> N
                     import json as _json
 
                     u = f"{base_url.rstrip('/')}/partidas"
-                    b = _json.dumps({"pontuacao": pontuacao, "device": device})
+                    body_obj: dict[str, object] = {"pontuacao": pontuacao, "device": device}
+                    if personagem is not None:
+                        body_obj["personagem"] = personagem
+                    if build is not None:
+                        body_obj["build"] = build
+                    b = _json.dumps(body_obj)
                     r = await pyfetch(
                         u,
                         method="POST",
@@ -1387,9 +1482,23 @@ async def _report_partida_async(base_url: str, pontuacao: int, device: str) -> N
                     )
                     await r.bytes()
                 except Exception:
-                    await asyncio.to_thread(_post_partida_sync, base_url, pontuacao, device)
+                    await asyncio.to_thread(
+                        _post_partida_sync,
+                        base_url,
+                        pontuacao,
+                        device,
+                        personagem=personagem,
+                        build=build,
+                    )
         else:
-            await asyncio.to_thread(_post_partida_sync, base_url, pontuacao, device)
+            await asyncio.to_thread(
+                _post_partida_sync,
+                base_url,
+                pontuacao,
+                device,
+                personagem=personagem,
+                build=build,
+            )
     except Exception:
         pass
 
@@ -1441,14 +1550,17 @@ async def main() -> None:
     player_hp = 1
     game_over = False
     shooting_enabled = True
+    music_enabled = True
     font = pygame.font.SysFont(None, 32)
     font_btn = pygame.font.SysFont(None, 22)
+    font_build = pygame.font.SysFont(None, 16)
     font_death = pygame.font.SysFont(None, 44)
     font_sel_title = pygame.font.SysFont(None, 30)
     font_sel_name = pygame.font.SysFont(None, 24)
     font_sel_sub = pygame.font.SysFont(None, 20)
     font_sel_stats = pygame.font.SysFont(None, 17)
     shoot_btn = _shoot_toggle_rect()
+    music_btn = _music_toggle_rect()
 
     _sel_layout_preview = _character_select_layout(characters)
     _thumb_side = (
@@ -1460,10 +1572,11 @@ async def main() -> None:
         str(ch["id"]): _load_character_portrait(ch, (_thumb_side, _thumb_side)) for ch in characters
     }
 
-    if not _RUNS_IN_BROWSER_WASM and sel_music_path is not None:
-        _pygame_bgm_play_file(sel_music_path, music_volume=_audio_vol("musica_selecao_pygame"))
-    elif _RUNS_IN_BROWSER_WASM and sel_music_path is not None:
-        _wasm_selection_music_start(sel_music_path)
+    if music_enabled:
+        if not _RUNS_IN_BROWSER_WASM and sel_music_path is not None:
+            _pygame_bgm_play_file(sel_music_path, music_volume=_audio_vol("musica_selecao_pygame"))
+        elif _RUNS_IN_BROWSER_WASM and sel_music_path is not None:
+            _wasm_selection_music_start(sel_music_path)
 
     # Texturas de fundo (só desktop); no browser a grelha é gerada em draw_world_background.
     await asyncio.sleep(0)
@@ -1473,6 +1586,41 @@ async def main() -> None:
     CARD_BG = (38, 42, 52)
     CARD_LINE = (72, 78, 92)
     CARD_HOVER = (52, 62, 82)
+
+    def pause_all_bg_music() -> None:
+        _pygame_bgm_stop()
+        _wasm_html5_select_bg_stop()
+        _wasm_web_audio_bg_stop()
+        if snd_bg is not None:
+            try:
+                snd_bg.stop()
+            except pygame.error:
+                pass
+
+    def resume_bg_music_for_phase() -> None:
+        if not music_enabled:
+            return
+        if game_phase == "select":
+            if not _RUNS_IN_BROWSER_WASM and sel_music_path is not None:
+                _pygame_bgm_play_file(sel_music_path, music_volume=_audio_vol("musica_selecao_pygame"))
+            elif _RUNS_IN_BROWSER_WASM and sel_music_path is not None:
+                _wasm_selection_music_start(sel_music_path)
+        elif game_phase == "playing" and selected_character is not None:
+            bg_path = _resolve_audio_file(selected_character.get("musica_fundo"))
+            if _RUNS_IN_BROWSER_WASM:
+                _wasm_web_audio_prime()
+                _wasm_web_audio_bg_start(pack_path=bg_path)
+            else:
+                _pygame_bgm_stop()
+                if bg_path is not None and _pygame_bgm_play_file(
+                    bg_path, music_volume=_audio_vol("musica_jogo_pygame")
+                ):
+                    pass
+                elif snd_bg is not None and snd_bg.get_num_channels() == 0:
+                    try:
+                        snd_bg.play(loops=-1)
+                    except pygame.error:
+                        pass
 
     def begin_play(character: dict) -> None:
         nonlocal game_phase, selected_character, player_max_hp, player, all_sprites
@@ -1494,20 +1642,29 @@ async def main() -> None:
         shooting_enabled = True
         _wasm_html5_select_bg_stop()
         game_phase = "playing"
-        bg_path = _resolve_audio_file(character.get("musica_fundo"))
-        if _RUNS_IN_BROWSER_WASM:
-            # Não adiar com create_task/sleep(0): o browser deixa de contar como gesto do utilizador.
-            _wasm_web_audio_prime()
-            _wasm_web_audio_bg_start(pack_path=bg_path)
-        if not _RUNS_IN_BROWSER_WASM:
+        if music_enabled:
+            bg_path = _resolve_audio_file(character.get("musica_fundo"))
+            if _RUNS_IN_BROWSER_WASM:
+                # Não adiar com create_task/sleep(0): o browser deixa de contar como gesto do utilizador.
+                _wasm_web_audio_prime()
+                _wasm_web_audio_bg_start(pack_path=bg_path)
+            if not _RUNS_IN_BROWSER_WASM:
+                _pygame_bgm_stop()
+                if bg_path is not None and _pygame_bgm_play_file(
+                    bg_path, music_volume=_audio_vol("musica_jogo_pygame")
+                ):
+                    pass
+                elif snd_bg is not None and snd_bg.get_num_channels() == 0:
+                    try:
+                        snd_bg.play(loops=-1)
+                    except pygame.error:
+                        pass
+        else:
+            _wasm_web_audio_bg_stop()
             _pygame_bgm_stop()
-            if bg_path is not None and _pygame_bgm_play_file(
-                bg_path, music_volume=_audio_vol("musica_jogo_pygame")
-            ):
-                pass
-            elif snd_bg is not None and snd_bg.get_num_channels() == 0:
+            if snd_bg is not None:
                 try:
-                    snd_bg.play(loops=-1)
+                    snd_bg.stop()
                 except pygame.error:
                     pass
 
@@ -1553,39 +1710,80 @@ async def main() -> None:
 
             if game_phase == "select":
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    ch = _pick_character_screen_pos(event.pos)
-                    if ch is not None:
-                        begin_play(ch)
+                    if music_btn.collidepoint(event.pos):
+                        music_enabled = not music_enabled
+                        if music_enabled:
+                            resume_bg_music_for_phase()
+                        else:
+                            pause_all_bg_music()
+                    else:
+                        ch = _pick_character_screen_pos(event.pos)
+                        if ch is not None:
+                            begin_play(ch)
                 elif event.type == pygame.FINGERDOWN:
                     fx, fy = event.x * WIDTH, event.y * HEIGHT
-                    ch = _pick_character_screen_pos((fx, fy))
-                    if ch is not None:
-                        begin_play(ch)
+                    if music_btn.collidepoint(fx, fy):
+                        music_enabled = not music_enabled
+                        if music_enabled:
+                            resume_bg_music_for_phase()
+                        else:
+                            pause_all_bg_music()
+                    else:
+                        ch = _pick_character_screen_pos((fx, fy))
+                        if ch is not None:
+                            begin_play(ch)
                 continue
 
             assert player is not None
 
             if game_over:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    reset_run()
+                    if music_btn.collidepoint(event.pos):
+                        music_enabled = not music_enabled
+                        if music_enabled:
+                            resume_bg_music_for_phase()
+                        else:
+                            pause_all_bg_music()
+                    else:
+                        reset_run()
                 elif event.type == pygame.FINGERDOWN:
-                    reset_run()
+                    fx, fy = event.x * WIDTH, event.y * HEIGHT
+                    if music_btn.collidepoint(fx, fy):
+                        music_enabled = not music_enabled
+                        if music_enabled:
+                            resume_bg_music_for_phase()
+                        else:
+                            pause_all_bg_music()
+                    else:
+                        reset_run()
                 continue
 
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if shoot_btn.collidepoint(event.pos):
                     shooting_enabled = not shooting_enabled
+                elif music_btn.collidepoint(event.pos):
+                    music_enabled = not music_enabled
+                    if music_enabled:
+                        resume_bg_music_for_phase()
+                    else:
+                        pause_all_bg_music()
                 else:
                     target_move_pos = screen_to_world(event.pos)
 
             if event.type == pygame.MOUSEMOTION and pygame.mouse.get_pressed()[0]:
-                if not shoot_btn.collidepoint(event.pos):
+                if not shoot_btn.collidepoint(event.pos) and not music_btn.collidepoint(event.pos):
                     target_move_pos = screen_to_world(event.pos)
 
             if event.type == pygame.FINGERDOWN:
                 fx, fy = event.x * WIDTH, event.y * HEIGHT
                 if shoot_btn.collidepoint(fx, fy):
                     shooting_enabled = not shooting_enabled
+                elif music_btn.collidepoint(fx, fy):
+                    music_enabled = not music_enabled
+                    if music_enabled:
+                        resume_bg_music_for_phase()
+                    else:
+                        pause_all_bg_music()
                 else:
                     target_move_pos = screen_to_world((fx, fy))
             if event.type == pygame.FINGERMOTION:
@@ -1665,7 +1863,14 @@ async def main() -> None:
                     game_over = True
                     base = _analytics_api_base(cfg)
                     if base is not None:
-                        await _report_partida_async(base, score, _analytics_device_label())
+                        pid, bn = _analytics_partida_extras(cfg, selected_character)
+                        await _report_partida_async(
+                            base,
+                            score,
+                            _analytics_device_label(),
+                            personagem=pid,
+                            build=bn,
+                        )
 
         if game_phase == "select":
             screen.fill(BLACK)
@@ -1714,17 +1919,37 @@ async def main() -> None:
             screen.blit(hp_txt, (10, 42))
 
             btn_bg = GREEN_ON if shooting_enabled else RED_OFF
-            pygame.draw.rect(screen, btn_bg, shoot_btn, border_radius=8)
-            pygame.draw.rect(screen, WHITE, shoot_btn, 2, border_radius=8)
-            btn_label = "Tiro: ON" if shooting_enabled else "Tiro: OFF"
-            btn_txt = font_btn.render(btn_label, True, WHITE)
-            screen.blit(btn_txt, btn_txt.get_rect(center=shoot_btn.center))
+            pygame.draw.rect(screen, btn_bg, shoot_btn, border_radius=6)
+            pygame.draw.rect(screen, WHITE, shoot_btn, 2, border_radius=6)
+            tiro_lbl = "Tiro ON" if shooting_enabled else "Tiro OFF"
+            btn_txt = font_btn.render(tiro_lbl, True, WHITE)
+            screen.blit(
+                btn_txt,
+                btn_txt.get_rect(midright=(shoot_btn.left - 6, shoot_btn.centery)),
+            )
 
             if game_over:
                 msg = font_death.render("vc morreu", True, WHITE)
                 screen.blit(msg, msg.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 36)))
                 hint = font_btn.render("Clique ou toque para recomeçar", True, (190, 190, 200))
                 screen.blit(hint, hint.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 24)))
+
+        btn_m_bg = GREEN_ON if music_enabled else RED_OFF
+        pygame.draw.rect(screen, btn_m_bg, music_btn, border_radius=8)
+        pygame.draw.rect(screen, WHITE, music_btn, 2, border_radius=8)
+        m_lbl = "Música: ON" if music_enabled else "Música: OFF"
+        m_txt = font_btn.render(m_lbl, True, WHITE)
+        screen.blit(m_txt, m_txt.get_rect(center=music_btn.center))
+
+        binfo = cfg.get("build")
+        bn = 0
+        if isinstance(binfo, dict):
+            try:
+                bn = int(binfo.get("build_number", 0))
+            except (TypeError, ValueError):
+                bn = 0
+        build_line = font_build.render(f"build {bn}", True, (130, 135, 150))
+        screen.blit(build_line, build_line.get_rect(bottomright=(WIDTH - 6, HEIGHT - 4)))
 
         if _RUNS_IN_BROWSER_WASM:
             clock.tick(0)

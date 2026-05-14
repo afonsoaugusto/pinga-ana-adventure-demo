@@ -32,6 +32,21 @@ jobs:
       - name: Install tooling
         run: pip install pygbag pygame-ce
 
+      - name: Write build parameters
+        run: |
+          python3 -c "
+          import json, os
+          data = {
+              'build_number': int(os.environ.get('GITHUB_RUN_NUMBER', '0')),
+              'run_id': os.environ.get('GITHUB_RUN_ID', ''),
+              'sha': (os.environ.get('GITHUB_SHA', '') or '')[:7],
+          }
+          with open('build_params.json', 'w', encoding='utf-8') as f:
+              json.dump(data, f, indent=2)
+              f.write('\n')
+          print('build_params.json:', data)
+          "
+
       - name: Build web bundle
         run: python -m pygbag --build --template ci/default.tmpl --icon ci/favicon.png .
 
