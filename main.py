@@ -833,6 +833,8 @@ def load_game_config() -> dict:
                 )
             defaults["characters"] = load_characters_from_config(patch)
             defaults["som"] = _merge_som_config(dict(DEFAULT_SOM), patch.get("som"))
+            au = patch.get("analytics_api_url")
+            defaults["analytics_api_url"] = au.strip() if isinstance(au, str) else ""
             break
         except (OSError, json.JSONDecodeError):
             continue
@@ -1316,9 +1318,32 @@ def _post_partida_sync(base_url: str, pontuacao: int, device: str) -> None:
         pass
 
 
+async def _post_partida_wasm_pyfetch(base_url: str, pontuacao: int, device: str) -> None:
+    """No browser (Pyodide), urllib em thread costuma não fazer o pedido; usa fetch via pyfetch."""
+    import json
+
+    from pyodide.http import pyfetch  # type: ignore[import-not-found]
+
+    url = f"{base_url.rstrip('/')}/partidas"
+    body = json.dumps({"pontuacao": pontuacao, "device": device})
+    r = await pyfetch(
+        url,
+        method="POST",
+        body=body,
+        headers={"Content-Type": "application/json"},
+    )
+    await r.bytes()
+
+
 async def _report_partida_async(base_url: str, pontuacao: int, device: str) -> None:
     try:
-        await asyncio.to_thread(_post_partida_sync, base_url, pontuacao, device)
+        if _RUNS_IN_BROWSER_WASM:
+            try:
+                await _post_partida_wasm_pyfetch(base_url, pontuacao, device)
+            except ImportError:
+                await asyncio.to_thread(_post_partida_sync, base_url, pontuacao, device)
+        else:
+            await asyncio.to_thread(_post_partida_sync, base_url, pontuacao, device)
     except Exception:
         pass
 
