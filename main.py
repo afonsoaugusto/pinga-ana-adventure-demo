@@ -1419,7 +1419,11 @@ async def _post_partida_wasm_fetch(
     personagem: str | None = None,
     build: int | None = None,
 ) -> None:
-    """POST via `fetch` do browser (aparece na aba Network); evita pyfetch/thread no pygbag."""
+    """POST via `fetch` do browser (aparece na aba Network); evita pyfetch/thread no pygbag.
+
+    Em Pyodide, um único `to_js({...})` com `headers` como dict Python pode ser ignorado pelo
+    `fetch` e o pedido cai em GET (405 em /partidas). Converter `headers` com `to_js` à parte.
+    """
     import json
 
     import js  # type: ignore[import-not-found]
@@ -1432,13 +1436,8 @@ async def _post_partida_wasm_fetch(
     if build is not None:
         body_obj["build"] = build
     body = json.dumps(body_obj)
-    opts = to_js(
-        {
-            "method": "POST",
-            "headers": {"Content-Type": "application/json"},
-            "body": body,
-        }
-    )
+    headers_js = to_js({"Content-Type": "application/json"})
+    opts = to_js({"method": "POST", "headers": headers_js, "body": body})
     resp = await js.fetch(url, opts)
     await resp.arrayBuffer()
 
@@ -1473,7 +1472,7 @@ async def _report_partida_async(
                         body_obj["personagem"] = personagem
                     if build is not None:
                         body_obj["build"] = build
-                    b = _json.dumps(body_obj)
+                    b = _json.dumps(body_obj).encode("utf-8")
                     r = await pyfetch(
                         u,
                         method="POST",
@@ -1482,14 +1481,9 @@ async def _report_partida_async(
                     )
                     await r.bytes()
                 except Exception:
-                    await asyncio.to_thread(
-                        _post_partida_sync,
-                        base_url,
-                        pontuacao,
-                        device,
-                        personagem=personagem,
-                        build=build,
-                    )
+                    # Não usar urllib/asyncio.to_thread no WASM: no Emscripten costuma degradar
+                    # para GET e devolve 405 em /partidas.
+                    pass
         else:
             await asyncio.to_thread(
                 _post_partida_sync,
