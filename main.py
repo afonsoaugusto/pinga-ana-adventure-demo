@@ -214,6 +214,21 @@ def _wasm_audio_mime_for_path(path: Path) -> str:
     }.get(ext, "application/octet-stream")
 
 
+def _wasm_bgm_path_playable_html5(pack_path: Path | None) -> Path | None:
+    """MIDI via `<audio src=data:audio/midi>` é mal suportado (iOS/Android: mudo ou erro).
+    Usar o próprio ficheiro se for PCM comprimido; para .mid tentar homólogo .ogg/.aac/…"""
+    if pack_path is None or not pack_path.is_file():
+        return None
+    suf = pack_path.suffix.lower()
+    if suf not in (".mid", ".midi"):
+        return pack_path
+    for ext in (".ogg", ".opus", ".aac", ".m4a", ".mp3", ".wav"):
+        alt = pack_path.with_suffix(ext)
+        if alt.is_file():
+            return alt
+    return None
+
+
 def _wasm_audio_data_url(path: Path) -> str | None:
     """Lê áudio do FS embebido (pós-extract do .tar.gz) e expõe como data URL.
 
@@ -423,8 +438,9 @@ def _wasm_web_audio_bg_start(*, pack_path: Path | None = None) -> None:
         return
     _wasm_html5_select_bg_stop()
     _wasm_web_audio_bg_stop()
-    if pack_path is not None and pack_path.is_file():
-        url = _wasm_audio_data_url(pack_path)
+    html5_bgm = _wasm_bgm_path_playable_html5(pack_path)
+    if html5_bgm is not None:
+        url = _wasm_audio_data_url(html5_bgm)
         if url:
             _WASM_HTML5_BG = _wasm_play_url_html5(
                 url, volume=_audio_vol("musica_jogo_ficheiro_wasm"), loop=True
