@@ -37,8 +37,9 @@ _RUNS_IN_BROWSER_WASM = _compute_runs_in_browser_wasm()
 
 _WASM_WEB_AC: object | None = None
 _WASM_WEB_BG: tuple[object, object] | None = None
-_WASM_HTML5_BG: object | None = None
-_WASM_HTML5_SELECT_BG: object | None = None
+# Um único <audio> para música em loop (seleção + jogo): iOS rejeita novo .play()
+# após removeChild/teardown fora da cadeia de gesto inicial.
+_WASM_HTML5_LOOP_EL: object | None = None
 
 # pygbag: POST via `aio.fetch.RequestHandler` (não existe `pyodide.http.pyfetch` no stub).
 _wasm_aio_fetch_handler: object | None = None
@@ -161,45 +162,6 @@ def _wasm_html5_audio_attach(el: object, *, append_to_dom: bool) -> None:
         pass
 
 
-def _wasm_play_url_html5(
-    url: str, *, volume: float = 0.45, loop: bool = True, append_to_dom: bool = True
-) -> object | None:
-    """`<audio src=…>` com URL HTTP, `data:` (base64) ou `blob:` (quando suportado)."""
-    if not _RUNS_IN_BROWSER_WASM or not url or not isinstance(url, str):
-        return None
-    el = None
-    try:
-        from js import document  # type: ignore[import-not-found]
-
-        if hasattr(document, "createElement"):
-            el = document.createElement("audio")
-            el.preload = "auto"
-            el.src = url
-    except Exception:
-        el = None
-    if el is None:
-        Ctor = _wasm_js_audio_ctor()
-        if Ctor is None:
-            return None
-        try:
-            try:
-                el = Ctor.new(url)
-            except Exception:
-                el = Ctor(url)
-        except Exception:
-            return None
-    try:
-        _wasm_html5_audio_attach(el, append_to_dom=append_to_dom)
-        el.volume = float(volume)
-        el.loop = bool(loop)
-        play_ret = el.play()
-        if play_ret is not None and hasattr(play_ret, "catch"):
-            play_ret.catch(lambda *_: None)
-        return el
-    except Exception:
-        return None
-
-
 def _wasm_audio_mime_for_path(path: Path) -> str:
     ext = path.suffix.lower()
     return {
@@ -282,18 +244,126 @@ def _wasm_html5_audio_hard_stop(el: object | None) -> None:
         pass
 
 
-def _wasm_html5_select_bg_stop() -> None:
-    global _WASM_HTML5_SELECT_BG
-    el = _WASM_HTML5_SELECT_BG
-    _WASM_HTML5_SELECT_BG = None
-    _wasm_html5_audio_hard_stop(el)
+def _wasm_web_audio_oscillator_stop_only() -> None:
+    """Para só o oscilador de BGM fallback (o <audio> em loop trata-se à parte)."""
+    global _WASM_WEB_BG
+    if _WASM_WEB_BG is None:
+        return
+    try:
+        osc, _gn = _WASM_WEB_BG
+        ctx = _wasm_web_audio_context()
+        if ctx is not None and hasattr(osc, "stop"):
+            osc.stop(float(ctx.currentTime))
+    except Exception:
+        pass
+    _WASM_WEB_BG = None
+
+
+def _wasm_loop_bgm_play(url: str, *, volume: float, loop: bool = True) -> bool:
+    """Um único `<audio>` em loop: troca `src` sem removeChild (Safari/iOS bloqueia novo nó)."""
+    global _WASM_HTML5_LOOP_EL
+    if not _RUNS_IN_BROWSER_WASM or not url or not isinstance(url, str):
+        return False
+    el = _WASM_HTML5_LOOP_EL
+    if el is None:
+        try:
+            from js import document  # type: ignore[import-not-found]
+
+            if hasattr(document, "createElement"):
+                el = document.createElement("audio")
+                el.preload = "auto"
+        except Exception:
+            el = None
+        if el is None:
+            Ctor = _wasm_js_audio_ctor()
+            if Ctor is None:
+                return False
+            try:
+                try:
+                    el = Ctor.new("")
+                except Exception:
+                    el = Ctor("")
+            except Exception:
+                return False
+        _wasm_html5_audio_attach(el, append_to_dom=True)
+        _WASM_HTML5_LOOP_EL = el
+    el = _WASM_HTML5_LOOP_EL
+    assert el is not None
+    try:
+        try:
+            el.pause()
+        except Exception:
+            pass
+        el.volume = float(volume)
+        el.loop = bool(loop)
+        el.src = url
+        try:
+            el.load()
+        except Exception:
+            pass
+        play_ret = el.play()
+        if play_ret is not None and hasattr(play_ret, "catch"):
+            play_ret.catch(lambda *_: None)
+        return True
+    except Exception:
+        return False
+
+
+def _wasm_loop_bgm_pause_only() -> None:
+    el = _WASM_HTML5_LOOP_EL
+    if el is None:
+        return
+    try:
+        el.pause()
+    except Exception:
+        pass
+
+
+def _wasm_loop_bgm_resume() -> bool:
+    """Retoma após mute por UI; só se `src` ainda estiver definido."""
+    el = _WASM_HTML5_LOOP_EL
+    if el is None:
+        return False
+    try:
+        src = str(getattr(el, "src", "") or getattr(el, "currentSrc", "") or "").strip()
+        if not src:
+            return False
+        play_ret = el.play()
+        if play_ret is not None and hasattr(play_ret, "catch"):
+            play_ret.catch(lambda *_: None)
+        return True
+    except Exception:
+        return False
+
+
+def _wasm_loop_bgm_soft_clear() -> None:
+    """Para e limpa `src` sem remover o nó do DOM (reutilização iOS)."""
+    el = _WASM_HTML5_LOOP_EL
+    if el is None:
+        return
+    try:
+        el.loop = False
+        el.pause()
+        el.currentTime = 0
+    except Exception:
+        pass
+    try:
+        el.src = ""
+    except Exception:
+        try:
+            el.removeAttribute("src")
+        except Exception:
+            pass
+    try:
+        el.load()
+    except Exception:
+        pass
 
 
 def _wasm_selection_music_start(path: Path | None) -> None:
-    global _WASM_HTML5_SELECT_BG
     if not _RUNS_IN_BROWSER_WASM or path is None:
         return
-    _wasm_html5_select_bg_stop()
+    _wasm_web_audio_oscillator_stop_only()
     vol = _audio_vol("musica_selecao_wasm")
     candidates: list[Path] = [path]
     if path.suffix.lower() == ".aac":
@@ -304,10 +374,7 @@ def _wasm_selection_music_start(path: Path | None) -> None:
         if not cand.is_file():
             continue
         url = _wasm_audio_data_url(cand)
-        if not url:
-            continue
-        _WASM_HTML5_SELECT_BG = _wasm_play_url_html5(url, volume=vol, loop=True)
-        if _WASM_HTML5_SELECT_BG is not None:
+        if url and _wasm_loop_bgm_play(url, volume=vol, loop=True):
             return
 
 
@@ -433,25 +500,19 @@ def _wasm_web_audio_hurt() -> None:
 
 
 def _wasm_web_audio_bg_start(*, pack_path: Path | None = None) -> None:
-    global _WASM_WEB_BG, _WASM_HTML5_BG
+    global _WASM_WEB_BG
     if not _RUNS_IN_BROWSER_WASM:
         return
-    _wasm_html5_select_bg_stop()
-    _wasm_web_audio_bg_stop()
+    _wasm_web_audio_oscillator_stop_only()
     html5_bgm = _wasm_bgm_path_playable_html5(pack_path)
     if html5_bgm is not None:
-        url = _wasm_audio_data_url(html5_bgm)
-        if url:
-            _WASM_HTML5_BG = _wasm_play_url_html5(
-                url, volume=_audio_vol("musica_jogo_ficheiro_wasm"), loop=True
-            )
-            if _WASM_HTML5_BG is not None:
-                return
-    _WASM_HTML5_BG = _wasm_play_wav_html5(
-        _wasm_soft_loop_wav(), volume=_audio_vol("musica_jogo_loop_sintetico_wasm"), loop=True
-    )
-    if _WASM_HTML5_BG is not None:
+        u = _wasm_audio_data_url(html5_bgm)
+        if u and _wasm_loop_bgm_play(u, volume=_audio_vol("musica_jogo_ficheiro_wasm"), loop=True):
+            return
+    wav_url = "data:audio/wav;base64," + base64.b64encode(_wasm_soft_loop_wav()).decode("ascii")
+    if _wasm_loop_bgm_play(wav_url, volume=_audio_vol("musica_jogo_loop_sintetico_wasm"), loop=True):
         return
+    _wasm_loop_bgm_soft_clear()
     ctx = _wasm_web_audio_context()
     if ctx is None:
         return
@@ -471,20 +532,8 @@ def _wasm_web_audio_bg_start(*, pack_path: Path | None = None) -> None:
 
 
 def _wasm_web_audio_bg_stop() -> None:
-    global _WASM_WEB_BG, _WASM_HTML5_BG
-    el = _WASM_HTML5_BG
-    _WASM_HTML5_BG = None
-    _wasm_html5_audio_hard_stop(el)
-    if _WASM_WEB_BG is None:
-        return
-    try:
-        osc, _gn = _WASM_WEB_BG
-        ctx = _wasm_web_audio_context()
-        if ctx is not None and hasattr(osc, "stop"):
-            osc.stop(float(ctx.currentTime))
-    except Exception:
-        pass
-    _WASM_WEB_BG = None
+    _wasm_loop_bgm_soft_clear()
+    _wasm_web_audio_oscillator_stop_only()
 
 
 def _wasm_web_audio_prime() -> None:
@@ -603,6 +652,39 @@ WIDTH, HEIGHT = 360, 640
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Pinga Ana Adventure")
 clock = pygame.time.Clock()
+
+
+def _display_px() -> tuple[float, float]:
+    surf = pygame.display.get_surface()
+    if surf is None:
+        return float(WIDTH), float(HEIGHT)
+    w, h = surf.get_size()
+    return float(w), float(h)
+
+
+def _finger_event_to_px(event: pygame.event.Event) -> tuple[float, float]:
+    """Pygame/SDL: normalmente normalizado em [0,1]; alguns backends (pygbag) enviam pixéis."""
+    sx, sy = _display_px()
+    xf, yf = float(event.x), float(event.y)
+    if xf <= 1.0 + 1e-6 and yf <= 1.0 + 1e-6 and xf >= -1e-6 and yf >= -1e-6:
+        return xf * sx, yf * sy
+    return xf, yf
+
+
+def _mouse_click_is_left(event: pygame.event.Event) -> bool:
+    """Toque→rato sintetizado pode usar botão 0 em vez de BUTTON_LEFT (=1)."""
+    return bool(getattr(event, "type", None) == pygame.MOUSEBUTTONDOWN and getattr(event, "button", 1) in (0, 1))
+
+
+def _mouse_down_pos_px(event: pygame.event.Event) -> tuple[float, float]:
+    if hasattr(event, "pos"):
+        return float(event.pos[0]), float(event.pos[1])
+    mx, my = pygame.mouse.get_pos()
+    return float(mx), float(my)
+
+
+def _mouse_motion_drag_pos_px(event: pygame.event.Event) -> tuple[float, float]:
+    return _mouse_down_pos_px(event)
 
 
 def _present_display() -> None:
@@ -1591,8 +1673,8 @@ async def main() -> None:
 
     def pause_all_bg_music() -> None:
         _pygame_bgm_stop()
-        _wasm_html5_select_bg_stop()
-        _wasm_web_audio_bg_stop()
+        _wasm_loop_bgm_pause_only()
+        _wasm_web_audio_oscillator_stop_only()
         if snd_bg is not None:
             try:
                 snd_bg.stop()
@@ -1606,12 +1688,15 @@ async def main() -> None:
             if not _RUNS_IN_BROWSER_WASM and sel_music_path is not None:
                 _pygame_bgm_play_file(sel_music_path, music_volume=_audio_vol("musica_selecao_pygame"))
             elif _RUNS_IN_BROWSER_WASM and sel_music_path is not None:
-                _wasm_selection_music_start(sel_music_path)
+                _wasm_web_audio_prime()
+                if not _wasm_loop_bgm_resume():
+                    _wasm_selection_music_start(sel_music_path)
         elif game_phase == "playing" and selected_character is not None:
             bg_path = _resolve_audio_file(selected_character.get("musica_fundo"))
             if _RUNS_IN_BROWSER_WASM:
                 _wasm_web_audio_prime()
-                _wasm_web_audio_bg_start(pack_path=bg_path)
+                if not _wasm_loop_bgm_resume():
+                    _wasm_web_audio_bg_start(pack_path=bg_path)
             else:
                 _pygame_bgm_stop()
                 if bg_path is not None and _pygame_bgm_play_file(
@@ -1642,7 +1727,6 @@ async def main() -> None:
         player_hp = player_max_hp
         game_over = False
         shooting_enabled = True
-        _wasm_html5_select_bg_stop()
         game_phase = "playing"
         if music_enabled:
             bg_path = _resolve_audio_file(character.get("musica_fundo"))
@@ -1705,26 +1789,32 @@ async def main() -> None:
             cam_offset.x = player.pos.x - WIDTH / 2
             cam_offset.y = player.pos.y - HEIGHT / 2
 
-        for event in pygame.event.get():
+        _events = pygame.event.get()
+        _wasm_skip_synth_mouse_click = False
+        if _RUNS_IN_BROWSER_WASM:
+            _wasm_skip_synth_mouse_click = any(e.type == pygame.FINGERDOWN for e in _events)
+
+        for event in _events:
             if event.type == pygame.QUIT:
                 running = False
                 continue
 
             if game_phase == "select":
-                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if music_btn.collidepoint(event.pos):
+                if _mouse_click_is_left(event) and not (_RUNS_IN_BROWSER_WASM and _wasm_skip_synth_mouse_click):
+                    mx, my = _mouse_down_pos_px(event)
+                    if music_btn.collidepoint((mx, my)):
                         music_enabled = not music_enabled
                         if music_enabled:
                             resume_bg_music_for_phase()
                         else:
                             pause_all_bg_music()
                     else:
-                        ch = _pick_character_screen_pos(event.pos)
+                        ch = _pick_character_screen_pos((mx, my))
                         if ch is not None:
                             begin_play(ch)
                 elif event.type == pygame.FINGERDOWN:
-                    fx, fy = event.x * WIDTH, event.y * HEIGHT
-                    if music_btn.collidepoint(fx, fy):
+                    fx, fy = _finger_event_to_px(event)
+                    if music_btn.collidepoint((fx, fy)):
                         music_enabled = not music_enabled
                         if music_enabled:
                             resume_bg_music_for_phase()
@@ -1739,8 +1829,9 @@ async def main() -> None:
             assert player is not None
 
             if game_over:
-                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if music_btn.collidepoint(event.pos):
+                if _mouse_click_is_left(event) and not (_RUNS_IN_BROWSER_WASM and _wasm_skip_synth_mouse_click):
+                    mx, my = _mouse_down_pos_px(event)
+                    if music_btn.collidepoint((mx, my)):
                         music_enabled = not music_enabled
                         if music_enabled:
                             resume_bg_music_for_phase()
@@ -1749,8 +1840,8 @@ async def main() -> None:
                     else:
                         reset_run()
                 elif event.type == pygame.FINGERDOWN:
-                    fx, fy = event.x * WIDTH, event.y * HEIGHT
-                    if music_btn.collidepoint(fx, fy):
+                    fx, fy = _finger_event_to_px(event)
+                    if music_btn.collidepoint((fx, fy)):
                         music_enabled = not music_enabled
                         if music_enabled:
                             resume_bg_music_for_phase()
@@ -1760,27 +1851,29 @@ async def main() -> None:
                         reset_run()
                 continue
 
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if shoot_btn.collidepoint(event.pos):
+            if _mouse_click_is_left(event) and not (_RUNS_IN_BROWSER_WASM and _wasm_skip_synth_mouse_click):
+                mx, my = _mouse_down_pos_px(event)
+                if shoot_btn.collidepoint((mx, my)):
                     shooting_enabled = not shooting_enabled
-                elif music_btn.collidepoint(event.pos):
+                elif music_btn.collidepoint((mx, my)):
                     music_enabled = not music_enabled
                     if music_enabled:
                         resume_bg_music_for_phase()
                     else:
                         pause_all_bg_music()
                 else:
-                    target_move_pos = screen_to_world(event.pos)
+                    target_move_pos = screen_to_world((mx, my))
 
             if event.type == pygame.MOUSEMOTION and pygame.mouse.get_pressed()[0]:
-                if not shoot_btn.collidepoint(event.pos) and not music_btn.collidepoint(event.pos):
-                    target_move_pos = screen_to_world(event.pos)
+                mx, my = _mouse_motion_drag_pos_px(event)
+                if not shoot_btn.collidepoint((mx, my)) and not music_btn.collidepoint((mx, my)):
+                    target_move_pos = screen_to_world((mx, my))
 
             if event.type == pygame.FINGERDOWN:
-                fx, fy = event.x * WIDTH, event.y * HEIGHT
-                if shoot_btn.collidepoint(fx, fy):
+                fx, fy = _finger_event_to_px(event)
+                if shoot_btn.collidepoint((fx, fy)):
                     shooting_enabled = not shooting_enabled
-                elif music_btn.collidepoint(fx, fy):
+                elif music_btn.collidepoint((fx, fy)):
                     music_enabled = not music_enabled
                     if music_enabled:
                         resume_bg_music_for_phase()
@@ -1789,7 +1882,8 @@ async def main() -> None:
                 else:
                     target_move_pos = screen_to_world((fx, fy))
             if event.type == pygame.FINGERMOTION:
-                target_move_pos = screen_to_world((event.x * WIDTH, event.y * HEIGHT))
+                fx, fy = _finger_event_to_px(event)
+                target_move_pos = screen_to_world((fx, fy))
 
         if game_phase == "playing" and not game_over and player is not None:
             player.move(target_move_pos)
