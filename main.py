@@ -40,6 +40,9 @@ _WASM_WEB_BG: tuple[object, object] | None = None
 _WASM_HTML5_BG: object | None = None
 _WASM_HTML5_SELECT_BG: object | None = None
 
+# pygbag: POST via `aio.fetch.RequestHandler` (não existe `pyodide.http.pyfetch` no stub).
+_wasm_aio_fetch_handler: object | None = None
+
 DEFAULT_SOM: dict[str, float] = {
     "musica_selecao_pygame": 0.32,
     "musica_selecao_wasm": 0.22,
@@ -1419,14 +1422,8 @@ async def _post_partida_wasm_fetch(
     personagem: str | None = None,
     build: int | None = None,
 ) -> None:
-    """POST /partidas via `pyodide.http.pyfetch` (reencaminha `method`/`body` para o Fetch API).
-
-    `js.fetch` + `to_js` pode responder 405 sem lançar (GET em vez de POST), pelo que o
-    fallback `pyfetch` no except nunca era executado.
-    """
+    """POST /partidas no browser: Pyodide usa `pyfetch`; pygbag só tem stub pyodide — usar `aio.fetch`."""
     import json
-
-    from pyodide.http import pyfetch  # type: ignore[import-not-found]
 
     url = f"{base_url.rstrip('/')}/partidas"
     body_obj: dict[str, object] = {"pontuacao": pontuacao, "device": device}
@@ -1434,14 +1431,32 @@ async def _post_partida_wasm_fetch(
         body_obj["personagem"] = personagem
     if build is not None:
         body_obj["build"] = build
-    payload = json.dumps(body_obj).encode("utf-8")
-    resp = await pyfetch(
-        url,
-        method="POST",
-        body=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    await resp.bytes()
+
+    pyfetch = None
+    try:
+        from pyodide.http import pyfetch as _pyfetch  # type: ignore[import-not-found]
+
+        pyfetch = _pyfetch
+    except ImportError:
+        pass
+
+    if pyfetch is not None:
+        payload = json.dumps(body_obj).encode("utf-8")
+        resp = await pyfetch(
+            url,
+            method="POST",
+            body=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        await resp.bytes()
+        return
+
+    global _wasm_aio_fetch_handler
+    from aio.fetch import RequestHandler  # type: ignore[import-not-found]
+
+    if _wasm_aio_fetch_handler is None:
+        _wasm_aio_fetch_handler = RequestHandler()
+    await _wasm_aio_fetch_handler.post(url, body_obj)
 
 
 async def _report_partida_async(
