@@ -178,12 +178,19 @@ def _wasm_audio_mime_for_path(path: Path) -> str:
 
 def _wasm_bgm_path_playable_html5(pack_path: Path | None) -> Path | None:
     """MIDI via `<audio src=data:audio/midi>` é mal suportado (iOS/Android: mudo ou erro).
-    Usar o próprio ficheiro se for PCM comprimido; para .mid tentar homólogo .ogg/.aac/…"""
+    Ficheiros comprimidos tocam; para .mid tenta homólogo (mesmo nome), sufixos *_wasm/_web e extensões."""
     if pack_path is None or not pack_path.is_file():
         return None
     suf = pack_path.suffix.lower()
     if suf not in (".mid", ".midi"):
         return pack_path
+    stem = pack_path.stem
+    parent = pack_path.parent
+    for tag in ("_wasm", "_web", "_mobile"):
+        for ext in (".ogg", ".opus", ".aac", ".m4a", ".mp3", ".wav"):
+            alt = parent / f"{stem}{tag}{ext}"
+            if alt.is_file():
+                return alt
     for ext in (".ogg", ".opus", ".aac", ".m4a", ".mp3", ".wav"):
         alt = pack_path.with_suffix(ext)
         if alt.is_file():
@@ -816,6 +823,9 @@ def _normalize_character(raw: dict) -> dict | None:
     musica_fundo = raw.get("musica_fundo")
     if isinstance(musica_fundo, str) and musica_fundo.strip():
         out["musica_fundo"] = musica_fundo.strip()
+    musica_fundo_wasm = raw.get("musica_fundo_wasm")
+    if isinstance(musica_fundo_wasm, str) and musica_fundo_wasm.strip():
+        out["musica_fundo_wasm"] = musica_fundo_wasm.strip()
     return out
 
 
@@ -987,6 +997,18 @@ def _resolve_audio_file(rel: str | None) -> Path | None:
         if cand.is_file():
             return cand
     return None
+
+
+def _wasm_resolve_character_bgm_pack(character: dict | None) -> Path | None:
+    """No WASM o `<audio>` não toca MIDI; usar `musica_fundo_wasm` (ogg/…), se existir no config."""
+    if not isinstance(character, dict):
+        return None
+    raw = character.get("musica_fundo_wasm")
+    if isinstance(raw, str) and raw.strip():
+        p = _resolve_audio_file(raw.strip())
+        if p is not None and p.is_file():
+            return p
+    return _resolve_audio_file(character.get("musica_fundo"))
 
 
 def _pygame_bgm_stop() -> None:
@@ -1692,12 +1714,13 @@ async def main() -> None:
                 if not _wasm_loop_bgm_resume():
                     _wasm_selection_music_start(sel_music_path)
         elif game_phase == "playing" and selected_character is not None:
-            bg_path = _resolve_audio_file(selected_character.get("musica_fundo"))
             if _RUNS_IN_BROWSER_WASM:
+                bg_path = _wasm_resolve_character_bgm_pack(selected_character)
                 _wasm_web_audio_prime()
                 if not _wasm_loop_bgm_resume():
                     _wasm_web_audio_bg_start(pack_path=bg_path)
             else:
+                bg_path = _resolve_audio_file(selected_character.get("musica_fundo"))
                 _pygame_bgm_stop()
                 if bg_path is not None and _pygame_bgm_play_file(
                     bg_path, music_volume=_audio_vol("musica_jogo_pygame")
@@ -1729,12 +1752,13 @@ async def main() -> None:
         shooting_enabled = True
         game_phase = "playing"
         if music_enabled:
-            bg_path = _resolve_audio_file(character.get("musica_fundo"))
             if _RUNS_IN_BROWSER_WASM:
+                bg_path = _wasm_resolve_character_bgm_pack(character)
                 # Não adiar com create_task/sleep(0): o browser deixa de contar como gesto do utilizador.
                 _wasm_web_audio_prime()
                 _wasm_web_audio_bg_start(pack_path=bg_path)
-            if not _RUNS_IN_BROWSER_WASM:
+            else:
+                bg_path = _resolve_audio_file(character.get("musica_fundo"))
                 _pygame_bgm_stop()
                 if bg_path is not None and _pygame_bgm_play_file(
                     bg_path, music_volume=_audio_vol("musica_jogo_pygame")
